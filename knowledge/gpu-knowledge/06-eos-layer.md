@@ -262,13 +262,14 @@ keep them apart:
   case-(2) residual; only the wording differs. The `MOM_EOS_Wright.F90` comment sites are
   `:1008, :1048, :1114, :1147`; the sole Roquet "implicit copy" site is `:817`.
 
-  > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The Wright anomaly branch (`:1013, :1053`) is the one place a device `do concurrent`
-  > body still literally passes `this`. Confirm whether this is deliberate (a form the ported
-  > PressureForce path never exercises with `rho_ref` present, so it was left) or an oversight. Roquet
-  > (`:274, :744, :783`) shows the `_loc` fix is trivially available, so if any GPU code path reaches
-  > `calculate_density_array_2d/3d_buggy_Wright` *with* `rho_ref`, this is a live correctness bug, not a
-  > tolerated limitation. Look at callers of `calculate_density(..., rho_ref=...)` for `EOS_WRIGHT` in
-  > `MOM_density_integrals.F90` / `MOM_PressureForce_FV.F90`.
+  > **Resolved (2026-07-14):** The Wright anomaly `this` branch is mainline-safe but a live hazard on
+  > the pf branch. On `dev/gpu` the generic 2D/3D-plus-`rho_ref` dispatch is reached only from host
+  > paths, so passing `this` costs nothing. On `port/pressureforce-benchmark_ALE` it *is* a live bug:
+  > the k-blocked `int_density_dz_generic_plm` (`MOM_density_integrals.F90`) calls 3-D
+  > `calculate_density(..., rho_ref=rho_ref)` with `use_rho_ref = .true.` **by default**, dispatching
+  > into the `present(rho_ref)` branch that passes polymorphic `this` inside a `do concurrent`
+  > (`calculate_density_array_2d_buggy_Wright` and its 3-D sibling). Merge gate for that branch: add
+  > `density_anomaly_elem_buggy_Wright_loc` first — trivial, and Roquet proves the pattern.
 
 ### 2.4 `int_density_dz_wright`: whole-routine offload, not just the elemental kernel
 
@@ -453,7 +454,7 @@ narrower cherry-pick of that larger, still-unmerged effort).
     - `MOM_EOS_Wright.F90:1008,1048` head `calculate_density_array_2d/3d_buggy_Wright`, whose **anomaly
       branch** (`:1013,:1053`) genuinely dereferences `this` inside the loop. That part is
       **unfinished work** (no `density_anomaly_elem_buggy_Wright_loc` exists), finishable by copying
-      Roquet's approach — see the FABLE-CHECK in §2.3.
+      Roquet's approach — see §2.3.
 
 ### 6.2 Boilerplate cost of the `_loc` duplication, per form
 
@@ -639,11 +640,8 @@ Opus verification pass (source + git only; no build/run). Checked every factual 
 - Added §6.4 (labeled *proposal*: `select case (form_of_EOS)` polymorphism-free end-state).
 - Renumbered old §6.3 → §6.5 (unchanged content).
 
-**FABLE-CHECK markers:** 1 (§2.3 — whether the Wright anomaly `this`-passing branch is a tolerated
-dead path or a live GPU correctness bug; needs a caller trace in `MOM_density_integrals.F90` /
-`MOM_PressureForce_FV.F90`).
-
 **Confidence:** High. All quantitative claims (counts, line numbers, commit stats, branch existence)
 independently reproduced from source and git. The one substantive error was in causal reasoning, not
-in the underlying line references, and has been corrected. Residual uncertainty is confined to the
-single flagged FABLE-CHECK, which requires a build/run or deeper caller trace to close definitively.
+in the underlying line references, and has been corrected. The Wright anomaly `this` branch (§2.3) has
+since been traced to its callers: host-only on `dev/gpu`, a live bug on
+`port/pressureforce-benchmark_ALE`.

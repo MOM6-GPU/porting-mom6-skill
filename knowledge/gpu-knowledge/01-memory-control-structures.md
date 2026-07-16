@@ -196,10 +196,11 @@ So the live map was deliberately relocated to a point (`:3650`, after the vertic
 rescaled) where `GV%Rlay`/`GV%g_prime` no longer change on the host. `GV%sLayer`/`GV%sInterface` are
 *not* in any device map — only `GV`, `Rlay`, and `g_prime`.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Is the device copy of `GV%Rlay`/`GV%g_prime` (mapped at `MOM.F90:3650`) actually
-> consumed by device kernels, or is it a vestigial/incomplete map? The disabled sibling at `:3057`
-> ("This does not work. GV%RLay changes sometime later.") suggests GV-on-device has a fraught history;
-> confirm which kernels read `GV%Rlay`/`GV%g_prime` on device before treating this map as load-bearing.
+> **Resolved (2026-07-14):** The `GV` device map is load-bearing, not vestigial. `GV%Rlay` is read
+> inside a device `do concurrent` — the `Rml_max`-vs-`GV%Rlay` binary density search in
+> `tracer_epipycnal_ML_diff` (`MOM_tracer_hor_diff.F90`) — so `initialize_MOM`'s
+> `map(to: GV, GV%Rlay, GV%g_prime)` is genuinely consumed. Treat the relocated map as required, and
+> keep the ordering constraint the disabled sibling records: it must stay after the host-side rescale.
 
 ---
 
@@ -615,11 +616,10 @@ reconcile the mixed presence state of a single struct. The fix: change **two** m
 (`set_visc_CSp` was **not** made `allocatable` here — that came one commit later in `c82e1254a`,
 §6.2; this commit only *maps* `set_visc_CSp` onto the device, it does not change its declaration.)
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The "partial presence" mechanism described here (one member of `CS` present on
-> device while a sibling needed by the same region is absent, which nvfortran cannot reconcile) is an
-> inference; the commit message only says "ambiguous 'partial presence' errors with fields on the
-> top-level CS in associated work." Confirm this is the actual nvfortran failure mode (vs. e.g. a
-> whole-struct-vs-member aliasing conflict) before relying on it as a general rule.
+> **Resolved (2026-07-14):** "Partial presence" is the literal NVIDIA runtime diagnostic, not a
+> reconstruction. The NVHPC OpenMP/OpenACC runtime raises a FATAL "partially present" error when a
+> mapping's address range partially overlaps an existing present-table entry — exactly the
+> whole-struct-over-attached-member overlap described here. Rely on this mechanism as a general rule.
 plus explicit `allocate(CS%G_in)` (before `G_in => CS%G_in`) and `allocate(CS%visc)` before their
 respective `map(to:)`/`map(alloc:)` directives, and a whole-struct `!$omp target update to(CS)` right
 after the grid upload (`MOM.F90:3104`, new in this commit) — which the commit message flags as breaking the project's
@@ -817,7 +817,7 @@ this document was checked against the current `dev/gpu` tree unless flagged belo
 1. **§2 (major):** the claim that no `GV` member is ever mapped and "it never appears in an `!$omp
    target enter data` list" is **false**. `MOM.F90:3650` has an active `map(to: GV, GV%Rlay,
    GV%g_prime)`, with an instructive commented-out earlier attempt at `:3057`. Rewritten with the
-   correct facts and a FABLE-CHECK.
+   correct facts.
 2. **§3.2:** the blanket claim that *"each by-value child is separately entered with its own
    `map(alloc:)`"* overstated the code — `CoriolisAdv`, `SAL_CSp`, `tides_CSp`, `HA_CSp` are by-value
    children with **no** preceding `map(alloc:)` (`grep`-verified). Only `continuity_CSp`,
@@ -828,10 +828,6 @@ this document was checked against the current `dev/gpu` tree unless flagged belo
 4. **Minor line numbers:** `MOM_end` subroutine starts at `:4698` (was cited as `:4680`); the three
    `DEALLOC_(CS%u/v/h)` are all on `:4778` (was `:4778-4779`); `NK_INTERFACE_` reclassified in the
    table from "dummy-arg form" to a heap-shape macro (`NK_+1` in static mode).
-
-**FABLE-CHECK markers added: 2** — (§2) whether the `GV%Rlay`/`GV%g_prime` device map at `MOM.F90:3650`
-is actually consumed by kernels or vestigial given the disabled `:3057` sibling; (§6.1) whether the
-inferred "sibling-member partial presence" mechanism is nvfortran's actual failure mode.
 
 **Confidence:** High. Nearly all line numbers and macro/expansion details were verified exact against
 the working tree; the few discrepancies were small offsets (now fixed) plus the two substantive

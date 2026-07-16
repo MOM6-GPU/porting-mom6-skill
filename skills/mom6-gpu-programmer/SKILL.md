@@ -47,9 +47,9 @@ they are absent — Phase 4 is then a **hand-back**, not a step you perform.
 
 So: never write "verified", "bitwise-identical", "confirmed", or "passes" about a run you did not
 execute. Write **"unverified — here is the exact experiment"** and name the config, the ranks, and
-the fields to checksum. `knowledge/KNOWLEDGE.md` §8a's OPEN list is open precisely because source-reading
+the fields to checksum. `knowledge/KNOWLEDGE.md` §9's open list is open precisely because source-reading
 cannot close those questions; quietly adding false certainty to that pile is the worst available
-contribution. §8a's own header models the standard: *"source+git only; no builds/runs."*
+contribution. §8's own header models the standard: *"source-and-git … no builds or runs."*
 
 ## Mode: PORT
 
@@ -131,7 +131,7 @@ For "audit this port", "is this ready", "review this diff", or "why are the answ
    **suspected** (needs a run), and **needs a maintainer decision**. Give each finding: the two
    sites, the predicate that reaches the bad path, the symptom it produces, and the one-line fix.
 
-Known latent items worth checking against before reporting something as new: §8b finding A (six
+Known latent items worth checking against before reporting something as new: §8, "six early-`exit`-under-`do concurrent` sites remain at HEAD" (six
 early-`exit`-under-DC sites still at HEAD), finding B (the `ADp` mapping lifecycle), and
 `gpu-data-residency`'s `khdt_x` worked example.
 
@@ -145,7 +145,7 @@ early-`exit`-under-DC sites still at HEAD), finding B (the `ADp` mapping lifecyc
 - A gate needs a build/run you cannot do.
 - **You find a bug in existing code.** Report it with its reaching predicate; do not silently fix it
   inside an unrelated port — it belongs in its own diff with its own gate.
-- The question is genuinely unclosable from source (the §8a OPEN shape).
+- The question is genuinely unclosable from source (the §9 open-question shape).
 
 Don't commit or push unless asked. When you do, the sequence is: refactor commit (CPU gate) →
 port commit (GPU gate) — separately auditable, never squashed together.

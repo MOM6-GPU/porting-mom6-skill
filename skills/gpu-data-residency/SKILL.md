@@ -27,7 +27,7 @@ order. Almost every mapping bug in this tree is a state-machine violation.
 
 | Event | Resulting state | Note |
 |---|---|---|
-| `enter data map(to: x)` | `SYNCED` | **Only if not already present.** On an already-present object this is a refcount bump and **copies nothing** — state unchanged (§8b finding C). |
+| `enter data map(to: x)` | `SYNCED` | **Only if not already present.** On an already-present object this is a refcount bump and **copies nothing** — state unchanged (§8, "a `map(to:)` on an already-present object does not refresh device contents"). |
 | `enter data map(alloc: x)` | `HOST_FRESH` | Device side is garbage. Legal only if the next device touch is a *write*. |
 | host write | `HOST_FRESH` | includes `!$OMP parallel do` loops — those are **host** CPU threads |
 | device write | `DEV_FRESH` | |
@@ -47,7 +47,7 @@ Two rules the mechanical walk will not derive on its own:
 - **`delete` vs `release`** — `delete` forces the refcount to **zero**, destroying any *outer*
   persistent mapping of the same object. Use `release` for scoped/per-call teardown; `delete` only
   in the `*_end` that mirrors the owning `enter data`. Never `map(delete:)` an object your scope
-  does not own (`MOM_vert_friction.F90:1105` silently kills `MOM.F90:3190`'s map — §8b finding B).
+  does not own (`vertvisc`'s `map(delete: ADp)` silently kills `initialize_MOM`'s map — §8, "the `ADp` mapping lifecycle").
 - **Re-mapping never refreshes.** If host scalars/descriptors changed after the first map, the only
   refresh is `target update to(...)`. Never "re-map to refresh"; never re-`enter data` a parent
   struct after its members are attached (`c82e1254a`).
@@ -144,12 +144,12 @@ Run these over the routine/module regardless of what the walk found:
 
 1. **Every `enter data` has a mirrored `exit data`** in the same scope (`15ca2a25f` leaked
    `b_denom_1`).
-2. **No `delete` on an object this scope does not own** (§8b finding B).
+2. **No `delete` on an object this scope does not own** (§8, "the `ADp` mapping lifecycle").
 3. **No copy-back expected from `delete`/`release`** — if the host needs the value, an `update from`
    or `map(from:)` must precede it.
 4. **Parent mapped exactly once**, members attached after, refreshed with `update to(parent)`.
 5. **Restart-registered, device-mutated fields** have a dominating `update from` before
-   `save_restart` (currently latent-only — §8a item 17; do not let your port break it).
+   `save_restart` (currently latent-only — §8, "restart staleness is latent, not live"; do not let your port break it).
 6. **Arrays-of-structs are not mapped element-by-element** on a hot path (`1865612de`).
 
 ### Step 6 — Report

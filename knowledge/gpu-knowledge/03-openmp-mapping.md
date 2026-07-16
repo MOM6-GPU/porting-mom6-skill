@@ -472,13 +472,13 @@ conditional branches (`if (CS%store_CAu)`, `if (dyn_p_surf)` etc.) where the aut
 100%-confident every code path mapped the variable exactly once — `release`'s decrement-not-force
 semantics degrade gracefully in that case.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Is the `delete` vs `release` split here genuinely load-bearing (reference-count
-> correctness) or merely stylistic convention? The reference-count distinction only produces different
-> behaviour when a variable is mapped more than once (nested/overlapping regions). If every scratch
-> array in these routines is mapped exactly once per call, `release` and `delete` are behaviourally
-> identical and the choice is cosmetic. Worth confirming against one multiply-mapped case (e.g. `CS`
-> itself, which is entered at `MOM_tracer_hor_diff.F90:209` and released at `:723`, but may also be
-> shell-mapped by a caller) before presenting the split as a hard rule.
+> **Resolved (2026-07-14):** The split is load-bearing, and in the dangerous direction — it is not a
+> cosmetic convention. `exit data map(delete:)` forces the refcount to zero, so a per-call `delete`
+> inside a callee destroys any outer, persistent mapping of the same object. This is live at HEAD:
+> `vertvisc`'s (`MOM_vert_friction.F90`) per-call `map(delete: ADp)` kills `initialize_MOM`'s `ADp`
+> map on the first call. Rule: `release` for scoped/per-call teardown; `delete` only in the owning
+> `*_end` routine that mirrors the owning `enter data`. Never `map(delete:)` an object your scope
+> does not own.
 
 ---
 
@@ -683,9 +683,6 @@ map-ordering rules, scalar members need no map); added a "critical copyback rule
 (`delete`/`release` never copy back — use `map(from:)`/`update from` first if the host needs the
 value); sharpened the `delete`/`release` table rows to the correct force-to-zero vs decrement OpenMP
 semantics; noted `allocated()` vs `associated()` guard selection for hybrid `vertvisc_type` fields.
-
-**FABLE-CHECK markers added:** 1 (§3.5 — whether the `delete`/`release` split is load-bearing
-reference-count correctness or cosmetic convention).
 
 **Confidence:** High. Every file:line and every commit cited in the document was opened and matched;
 the three corrections were the only substantive drifts (two stale-vs-current-code snippets and one

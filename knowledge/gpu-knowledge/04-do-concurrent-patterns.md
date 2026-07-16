@@ -31,12 +31,10 @@ building everywhere, the port introduces a macro and an autoconf probe:
   CPU-safe but does not GPU-parallelize the flagged locals — this is a portability fallback, not a
   performance guarantee).
 
-  > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The "degrades toward CPU-safe but does not GPU-parallelize the flagged locals"
-  > semantics is an inference about compiler behaviour when a bare `do concurrent` carries implicit
-  > (unspecified) locality — it is *not* verifiable from MOM6 source or git. The only load-bearing,
-  > verified fact is that the fallback still *compiles* correctly (`;` is a valid empty statement after
-  > the header). Confirm the actual codegen consequence against the F2018 standard / nvfortran docs
-  > before relying on it.
+  > **Open (reviewed 2026-07-14):** What does a bare `do concurrent` with implicit (unspecified)
+  > locality actually generate — does it really degrade toward CPU-safe rather than GPU-parallelize the
+  > flagged locals? The review confirmed the caution stands but could not settle it from source; the
+  > decisive check is `-Minfo=accel` output on one kernel. See KNOWLEDGE.md §9.
 
 - **Feature probe** — `ac/m4/mom6_fc_do_concurrent_local.m4` (`MOM6_FC_DO_CONCURRENT_LOCAL`):
   compiles a trivial `do concurrent(i=1:2) local(a,b)` program; if it compiles,
@@ -387,14 +385,11 @@ and `block_sum`/`block_max_pos` (§4.1, which *is* allowed to be a whole-array r
 are fine as long as they aren't *indexed elements* being reduced individually) exist as standalone
 scalars/arrays rather than being reduced straight into `CS%`-member array elements.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The generalization "a *whole array* (`block_sum`) is a valid `reduce()` target but
-> an *indexed element* (`max_srt(j)`) is not" is inferred from two data points — the in-source comment
-> at `MOM_tracer_hor_diff.F90:962` ("nvfortran do concurrent cannot reduce array elements") plus the
-> fact that `reduce(+: block_sum)` on the whole `block_sum(:)` array compiles and runs at
-> `MOM_coms.F90:723`. The comment only asserts the *element* case fails; that whole-array reduction is
-> *positively supported* (vs. merely happening to be written that way) is a reasonable but
-> not-independently-confirmed reading. Sanity-check against nvfortran's actual `do concurrent reduce`
-> support matrix before treating "whole-array reduce is fine" as a portable rule.
+> **Resolved (2026-07-14):** Rejecting an array-element `reduce` is conforming F2023, not an nvfortran
+> quirk. A locality-spec/`reduce` list takes *variable names*; `max_srt(j)` is an array element, not a
+> variable, so no conforming compiler accepts it. Whole-array `reduce(+: block_sum)` is conforming and
+> positively supported — "whole-array reduce is fine" is a portable rule, not a local observation. The
+> staged-scalar workaround above stays correct.
 
 ---
 
@@ -611,10 +606,6 @@ fresh greps; every cited exemplar line re-read; every quoted commit body re-fetc
 `local` → `local_init` → `reduce`/staged-scalar/OpenMP → `teams loop collapse(2)` for k-recurrence →
 manual `num_teams` for under-launch), each branch grounded in a verified file:line + commit.
 
-**FABLE-CHECK markers:** 2 — (1) the `DO_LOCALITY→;` fallback codegen semantics in §1 (compiler
-behaviour, unverifiable from source); (2) the whole-array-vs-indexed-element `reduce` capability
-generalization in §4.4.
-
 **Confidence:** High. Every numeric claim was recomputed and every exemplar/commit re-read against the
-`dev/gpu` tree; the only residual uncertainty is the two explicitly flagged compiler-behaviour
-inferences, which no amount of source reading can settle.
+`dev/gpu` tree; the only residual uncertainty is the implicit-locality codegen question flagged in §1,
+which needs `-Minfo=accel` output rather than more source reading.

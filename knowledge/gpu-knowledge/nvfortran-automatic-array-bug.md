@@ -81,4 +81,5 @@ Both are misleading and should be corrected against the table above:
   and the suggested fallback is exactly what already works (`vert_friction:737`). It would send an
   agent to swap constructs, which either succeeds for the wrong reason or hits the same wall.
 - **`KNOWLEDGE.md` §5 row 21** says *"in `pure`/DC procedures"* — but the evidence commit is neither.
-  (§8a item 19 gets it right: "non-dummy-sized automatics", and already recommends workaround 1.)
+  (§9, "`NK_GPU_MAX=500` sizing", gets it right: "non-dummy-sized automatics", and already
+  recommends workaround 1.)

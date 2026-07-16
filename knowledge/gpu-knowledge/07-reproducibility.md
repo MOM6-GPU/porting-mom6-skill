@@ -565,12 +565,12 @@ the grounding for each is cited so it can be re-verified.
    mismatch that is *not* an algorithm bug. The CPU reference build enables the FMA instruction
    (`FCFLAGS_OPT = -g -O3 -mavx -mfma`, `.testing/README.rst:147`); no explicit `-ffp-contract` /
    `-Mnofma` pin was found anywhere in `ac/`, the test `Makefile`s, or `.testing/`.
-   > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Does the port depend on nvfortran and the CPU reference compiler making the
-   > *same* FMA-contraction choices for CPU-vs-GPU bit-identity to hold? Check whether any build
-   > actually pins contraction (search build configs for `-ffp-contract`, `-Mnofma`, `-fma`,
-   > `Kieee`) — if not, CPU↔GPU checksum agreement may be relying on the two toolchains happening to
-   > contract identically, which is fragile. Ground truth is whatever flags the `dev/gpu` GPU build
-   > script actually passes (not in this repo's `ac/` — look in the run/build harness).
+   > **Resolved (2026-07-14):** Contraction *is* pinned in the canonical NVHPC toolchain:
+   > `mkmf/templates/ncrc5-nvhpc.mk` (and `ncrc-nvhpc.mk`) put `-Mnofma` — plus `-Mdaz` — in the
+   > **base** `FFLAGS`, for all build modes. So bit-identity does not rest on nvfortran and the CPU
+   > reference compiler happening to contract identically. The one action item that remains: the site
+   > GPU build harness is external to this repo, so confirm it inherits `-Mnofma`. If it does, this
+   > hazard is closed; if it does not, the fragility above is live.
 
 9. **The GPU reduction path assumes a compiler where `do concurrent local` implies `reduce`
    support.** The `HAVE_FC_DO_CONCURRENT_LOCAL` autoconf probe tests only `local(a,b)`, not the
@@ -673,11 +673,7 @@ Verified by an Opus verification agent against `dev/gpu` source + git only (no b
   `ac/`/`.testing/`), **parentheses-preservation** as a Fortran-standard anti-reassociation tool, and
   the `reduce`-clause build-portability assumption.
 
-**FABLE-CHECK markers added:** 1 (§6.3, on whether CPU↔GPU FMA-contraction parity is relied upon and
-un-pinned — could not be resolved from this repo's `ac/`/`.testing/`; needs the actual GPU build
-harness flags).
-
 **Confidence.** High on all EFP/checksum mechanics, the carry math, and git provenance (directly
-verified). Medium on the FMA hazard's practical impact — it is a real and correctly-described class of
-bug, but I found no in-repo evidence that CPU-vs-GPU FMA parity is currently a live problem (hence the
-FABLE-CHECK rather than an assertion).
+verified). The FMA hazard is a real and correctly-described class of bug, but it is not currently live:
+contraction is pinned by `-Mnofma` in the base `FFLAGS` of the NVHPC mkmf templates (§6.3), so it bites
+only if the site GPU build harness fails to inherit that flag.

@@ -36,7 +36,7 @@
 | 14 | General instability of `!$omp target` regions on some compilers | Commit `0f05b360f` — *"PGF: Convert omp target region to do concurrents. Some compilers do not handle the omp target syntax very well. Switching to do concurrent seems to minimize these issues."* (Note: "PGF" here = the **Pressure Gradient Force** module prefix used throughout `MOM_PressureForce_*.F90`/`MOM.F90` commit messages, **not** the PGI/PGF90 compiler.) | Prefer `do concurrent` over `!$omp target`/`!$omp parallel loop` where both are equally expressive | General reliability preference, feeds guiding principle §0.3 of `00-architecture.md` | Ongoing house rule |
 | 15 | Reversion: `omp target teams loop` → `do concurrent` | Commit `e8b0ecfbf` "omp target teams loop -> do concurrent" (`MOM_continuity_PPM.F90`, −85/+54 lines) | Same direction as #14 | Reliability/perf preference | Merged |
 | 16 | **A100 (Stellar) crash with nvfortran 25.5** | Commit `2108e0eba` — *"Remove eta_bt transfer from find_eta_2d that was causing crashes on stellar A100s with nvfortran 25.5"* — removed `!$omp target enter data map(to: eta_bt) if (present(eta_bt))` from `find_eta_2d` (`MOM_interface_heights.F90`) | Delete the conditional `map(to:)` of an **optional** dummy argument guarded by `if (present(...))`; rely on `eta_bt` being resident via its caller's own mapping | **Genuine compiler bug, version+arch specific (NVHPC 25.5, A100)** | Fixed by removal; the underlying pattern (`map(...) if (present(optional_arg))`) is suspect in general — see #17 |
-| 17 | Conditional `!$omp target enter data if(...) map(to:...)` lines commented out during the OpenACC→OpenMP migration (**see corrected history below — the original "four `present()` lines, never enabled" claim was wrong**) | Commit `f74525ae8` "Transition OpenACC to OpenMP" — *"We lose present() but overall it seems to work."* added **four** `!!!$omp target enter data if(...) &` commented blocks to `MOM_PressureForce_FV.F90`, of which **only one** uses the Fortran `present()` intrinsic (`if(present(pbce))`); the other three are `if(use_EOS)`, `if(use_p_atm)`, `if(.not. use_p_atm)` | The `if(present(pbce))` block was **un-commented and enabled the same day** by `d4ba8d69d` "OpenMP: PBCE on GPU" (2024-12-06), then **refactored out** by `9bfe7d358` "PF: Move pbce and eta management out of fn" (2025-01-14). **None of the four lines exist in current source.** | The "We lose present()" quote most likely refers to losing the **OpenACC `present()` data-presence clause** (which has no OpenMP-target equivalent), *not* the `if(present(optional))` guard — see FABLE-CHECK | **Not open in the way originally stated.** The `present(pbce)+map` pattern *was* enabled and used for ~5 weeks, then removed by a **refactor**, not because of a compiler crash. Its link to bug #16 (an actual A100/25.5 crash on `map(to:eta_bt) if(present(eta_bt))`) is at most circumstantial |
+| 17 | Conditional `!$omp target enter data if(...) map(to:...)` lines commented out during the OpenACC→OpenMP migration (**see corrected history below — the original "four `present()` lines, never enabled" claim was wrong**) | Commit `f74525ae8` "Transition OpenACC to OpenMP" — *"We lose present() but overall it seems to work."* added **four** `!!!$omp target enter data if(...) &` commented blocks to `MOM_PressureForce_FV.F90`, of which **only one** uses the Fortran `present()` intrinsic (`if(present(pbce))`); the other three are `if(use_EOS)`, `if(use_p_atm)`, `if(.not. use_p_atm)` | The `if(present(pbce))` block was **un-commented and enabled the same day** by `d4ba8d69d` "OpenMP: PBCE on GPU" (2024-12-06), then **refactored out** by `9bfe7d358` "PF: Move pbce and eta management out of fn" (2025-01-14). **None of the four lines exist in current source.** | The "We lose present()" quote refers to the Fortran **`present(optional_arg)` intrinsic**: the diff carries no OpenACC `present()` data clauses at all, only commented-out `if(present(pbce)) map(to: pbce)` conditional maps | **Not open in the way originally stated.** The `present(pbce)+map` pattern *was* enabled and used for ~5 weeks, then removed by a **refactor**, not because of a compiler crash. Its link to bug #16 (an actual A100/25.5 crash on `map(to:eta_bt) if(present(eta_bt))`) is a foreshadowing of the identical construct, not causal evidence — see §2.1 #17 |
 | 18 | Struct-of-arrays member arrays are expensive to **attach/detach** on device | Commit `1865612de` "Convert structs of arrays to flat arrays" — *"Flattening these arrays halves time when compiling for GPU. Lots of time was being spent 'attaching' and 'detaching' the member arrays to/from each struct on the GPU."* `MOM_tracer_hor_diff.F90` (−155/+131 lines) | Flatten arrays-of-derived-type-members into plain flat arrays indexed by a combined index, at the cost of ~20% more memory (700k→830k elements/array in benchmark) | Performance workaround for deep-copy/attach overhead (not a bug) | Merged; documented also in `00-architecture.md` §2.3 and `01-memory-control-structures.md` |
 | 19 | `do concurrent` locality specifiers (`local`, `reduce`) **not supported on all compilers in active use** | Commits `d2a72eddd` "DO_LOCALITY compatibility macro", `cd178dd52` "DO_LOCALITY() bugfix" | `DO_LOCALITY(X)` macro in `src/framework/do_concurrent_compat.h`: expands to `X` if `HAVE_FC_DO_CONCURRENT_LOCAL` else to `;` (a no-op that avoids a dangling line-continuation `&` parse error). Feature-detected by `ac/m4/mom6_fc_do_concurrent_local.m4` → `ac/configure.ac:172` → `HAVE_FC_DO_CONCURRENT_LOCAL` | Portability/feature-detection (not nvfortran-specific; guards **against compilers that don't have it**, e.g. older gfortran) | Resolved by design; permanent infra |
 | 20 | `do concurrent` formatting broke some compilers' parsers | Commit `e5444b4e5` "expand and indent do concurrents for gcc" | Reformat compact `do concurrent (...) ; stmt ; enddo` one-liners into expanded/indented multi-line form | Cross-compiler portability (gcc/gfortran, not nvfortran) | Merged |
@@ -119,16 +119,17 @@ single biggest risk of this catalogue being misread.
   `if(present())+map` pattern flagged suspect a release earlier and never re-enabled." That framing does
   **not** survive verification: in `f74525ae8` only one of the four commented `if(...)` blocks used
   `present()`, and that one (`if(present(pbce))`) was **enabled the same day** (`d4ba8d69d`) and later
-  removed by a plain **refactor** (`9bfe7d358`), not because of a crash. Treat #17 as an interesting
-  historical artefact, not independent evidence that `present()+map` is a compiler bug — bug #16 is the
-  only *demonstrated* instance.
-  > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Does the commit `f74525ae8` message *"We lose present()"* refer to the **OpenACC
-  > `present()` data clause** (which asserts device residency and has no direct OpenMP-target
-  > equivalent) rather than the Fortran `present(optional_arg)` intrinsic? The diff of `f74525ae8`
-  > drops several `!$acc … present(GV, e, pbce)` / `!$acc kernels present(rho_star)` clauses while
-  > converting `!$acc` → `!$omp`, which points at the data clause. If so, the entire #17-↔-#16
-  > "foreshadowing" narrative is a conflation of two unrelated meanings of `present()` and should be
-  > deleted, not merely softened. Look at `git show f74525ae8 -- src/core/MOM_PressureForce_FV.F90`.
+  removed by a plain **refactor** (`9bfe7d358`), not because of a crash. So #17 is **not independent
+  evidence** that `present()+map` is a compiler bug — bug #16 remains the only *demonstrated* instance.
+  The construct is identical, however, which is why the foreshadowing link below still stands.
+  > **Resolved (2026-07-14):** *"We lose present()"* means the Fortran `present(optional_arg)`
+  > **intrinsic**, not the OpenACC `present()` data clause. The `f74525ae8` diff contains **no**
+  > OpenACC `present()` data clauses anywhere; what it does contain are commented-out conditional
+  > OpenMP maps of the form `!!!$omp target enter data if(present(pbce)) map(to: pbce)` — the author
+  > tried intrinsic-`present()` conditional maps and disabled them. Both meanings of `present()` are
+  > therefore the same meaning here, and the #17-↔-#16 foreshadowing link **stands**: `f74525ae8`
+  > disabled the very construct (`map(to: X) if(present(X))`) that later crashed an A100 under
+  > NVHPC 25.5 and was removed outright by `2108e0eba`.
 
 ### 2.2 OpenMP/`do concurrent` semantics constraints (not bugs — the standard genuinely requires this)
 
@@ -198,9 +199,10 @@ bit-repro bugs are a distinct risk category from the NVHPC-specific ones above.
    seems to work."* Added four commented `!!!$omp target enter data if(...) &` blocks to
    `MOM_PressureForce_FV.F90`; **only one used `present()`** (`if(present(pbce))`). That one was
    **enabled the same day** by `d4ba8d69d` "OpenMP: PBCE on GPU" and later removed by the refactor
-   `9bfe7d358` (2025-01-14). "We lose present()" most plausibly refers to the **OpenACC `present()`
-   data clause**, not the Fortran intrinsic (see table row 17 + its FABLE-CHECK). Corrected from the
-   original "commented out, never enabled" claim.
+   `9bfe7d358` (2025-01-14). "We lose present()" refers to the Fortran **`present()` intrinsic**, not
+   the OpenACC data clause — the diff has no OpenACC `present()` clauses, only the commented-out
+   `if(present(pbce))` conditional maps (see table row 17). Corrected from the original "commented
+   out, never enabled" claim.
 2. `5274c3a8e` (2025-10-23) "fix segfault" — `omp target`+`parallel loop` around a k-recurrence
    crashed; replaced with `do concurrent`.
 3. `1865612de` (2025-11-27) "Convert structs of arrays to flat arrays" — attach/detach cost halved
@@ -310,9 +312,10 @@ Independent Opus verification against source + `git` on `dev/gpu` (no build/run 
    others are `if(use_EOS)`, `if(use_p_atm)`, `if(.not. use_p_atm)`). That one block was **un-commented
    and enabled the same day** by `d4ba8d69d` "OpenMP: PBCE on GPU", then removed ~5 weeks later by the
    **refactor** `9bfe7d358` "PF: Move pbce and eta management out of fn" — not by a crash. No such line
-   exists in current source. Its causal link to bug #16 is at most circumstantial; a FABLE-CHECK asks
-   whether "We lose present()" even refers to the Fortran intrinsic (it more likely means the OpenACC
-   `present()` data clause).
+   exists in current source. "We lose present()" does refer to the Fortran `present()` intrinsic — the
+   diff holds no OpenACC `present()` data clauses, only the commented-out `if(present(pbce))`
+   conditional maps — so the construct `f74525ae8` disabled is the same one that later crashed in bug
+   #16.
 
 **Independent completeness sweep:** grepped `src/` and `config_src/` for nvfortran/NVHPC/nvidia/
 "wrong answer|result"/"didn't like"/"cannot yet"/segfault/crash comments. No **nvfortran/GPU** bug
@@ -321,13 +324,9 @@ out of scope: `MOM_diagnostics.F90:305` ("some compiler options can force at lea
 a legacy ANSI-F77 loop-trip-count workaround, not GPU) and `mom_cap.F90:85` ("Model does not compile
 with `use ESMF, only:`" — an ESMF module-use quirk, not nvfortran).
 
-**FABLE-CHECK markers added:** 1 (row 17 / §2.1 #17 — the OpenACC-`present()`-clause vs
-Fortran-`present()`-intrinsic conflation). Row 2's "could the residual copy be eliminated?" question is
-folded into the §2.1 nuance rather than a separate marker.
-
 **Confidence:** High for every verbatim comment, commit-message quote, hash, and file:line anchor
 (all directly checked). High for the Row 2 and Row 17 corrections (checked the loop bodies and the
-`f74525ae8`→`d4ba8d69d`→`9bfe7d358` chain directly). The one genuinely open interpretive question —
-the meaning of "We lose present()" — is isolated in the FABLE-CHECK. The catalogue's "Still open?"
+`f74525ae8`→`d4ba8d69d`→`9bfe7d358` chain directly). The meaning of "We lose present()" is settled:
+it is the Fortran intrinsic, not the OpenACC data clause. The catalogue's "Still open?"
 statuses remain as-reported (no build/run was performed to re-test them), per the document's own method
 note.

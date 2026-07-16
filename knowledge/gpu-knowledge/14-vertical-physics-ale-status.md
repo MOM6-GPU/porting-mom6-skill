@@ -520,14 +520,14 @@ that "zero work, preparatory or otherwise" exists — the de-polymorphization qu
 answered (use the OM4 path) and the ragged-sizing question has a candidate answer (`NK_GPU_MAX`);
 what's missing is the driving device loop + bitwise validation.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Is the `diagnostics_port` strategy (OM4 select-case path + blanket `declare target`
-> + `NK_GPU_MAX=500` fixed sizing) the right long-term direction, or a dead end? Two concerns a
-> porting agent should resolve before building on it: (1) `NK_GPU_MAX=500` over-allocates every
-> column to 500 layers of private stack per thread — check whether that blows the device stack /
-> register budget for realistic `GV%ke` (~75), vs. sizing at `GV%ke`; (2) the OM4 path still
-> `select case`s over ~9 reconstruction kinds per column — confirm nvfortran handles that branch
-> divergence acceptably inside a `target teams loop`. Look at `MOM_remapping.F90:47,273-300,1275`
-> on `remotes/origin/jorge/diagnostics_port` and compare against the merged EOS `_loc` approach.
+> **Open (reviewed 2026-07-14):** Is the `diagnostics_port` strategy (OM4 select-case path + blanket
+> `declare target` + `NK_GPU_MAX=500` fixed sizing) the right long-term direction, or a dead end? The
+> review sharpened this: at `GV%ke≈75`, 500-deep per-thread private column arrays over-allocate
+> device local memory ~6.7×, and several such arrays per thread will spill and crush occupancy —
+> prefer sizing from the dummy argument (`size(h,3)`) or a blocked redesign. But the constraint
+> forcing the fixed size is real (nvfortran rejects non-dummy-sized automatics in device `pure`
+> procedures, `05c74b56b`), so the pragmatic middle is a `parameter` sized to a realistic maximum
+> (e.g. 128) plus an init-time `FATAL` guard. Needs an occupancy measurement. See KNOWLEDGE.md §9.
 
 ---
 
@@ -601,8 +601,8 @@ go first as a warm-up.
    per-column call chain `!$omp declare target` and replaced the ragged locals with an `NK_GPU_MAX`
    fixed size (§7.3) — so the two hard design questions have candidate answers (de-polymorphize by
    *using the OM4 select-case path* rather than rewriting `Recon1d`; fix ragged sizing with a max-`nk`
-   pad). *Recommended approach:* validate/adopt that branch's OM4-path direction (resolve the
-   FABLE-CHECK in §7.3 on `NK_GPU_MAX` stack cost first), then add the missing driving device loop at
+   pad). *Recommended approach:* validate/adopt that branch's OM4-path direction (settle the
+   `NK_GPU_MAX` occupancy cost first — §7.3, KNOWLEDGE.md §9), then add the missing driving device loop at
    `MOM_ALE.F90:745` (`do concurrent (j,i)` over columns), then bitwise-validate against CPU with
    `MOM_checksums`. This is still the highest-risk item and should be treated as a research problem,
    but it is no longer a blank slate.
@@ -708,8 +708,6 @@ Independently verified against source + git (branch `dev/gpu`, baseline `dev-gfd
 and restart-target `visc%Kd_*` members, diag `id_*>0` guards), CVMix external-library inlining risk,
 and an explicit dependency ordering (EOS `_loc` → N²/density → set_diffusivity → KPP/EPBL →
 kappa_shear). ALE remap now points at the concrete `diagnostics_port` groundwork.
-
-**FABLE-CHECK markers:** 1 (the `NK_GPU_MAX`/OM4-path strategy question in §7.3).
 
 **Confidence:** High. Every numstat, line number, commit hash, and code excerpt was checked directly
 against the tree; the one material correction (diagnostics_port remap groundwork) was verified by

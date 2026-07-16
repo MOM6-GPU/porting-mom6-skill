@@ -29,7 +29,7 @@ checksum diverges.
 >
 > So **there are currently zero `!NVF$ INLINE` directives in `src/`** (`grep -rF 'NVF$ INLINE' src/`
 > returns nothing) and `ratio_max` now carries **no** inline directive at all despite still being
-> called from `!$omp target`/`!$omp loop` regions (see FABLE-CHECK in §3). The prose below that says
+> called from `!$omp target`/`!$omp loop` regions (see §3). The prose below that says
 > "`!NVF$ INLINE`" describes the historical `4e3f1b758` state; the catalogue rows have been corrected
 > to HEAD.
 
@@ -63,7 +63,7 @@ callee to be device-resident.
 |---|---|---|---|---|
 | `flux_elem` (elemental subroutine) | `src/core/MOM_continuity_PPM.F90:1087` | `!DIR$ ATTRIBUTES FORCEINLINE :: flux_elem` (`:1086`) | `!$omp target teams` / `!$omp loop` in `zonal_mass_flux`/`meridional_mass_flux` (calls at `:719,1060,1457,1622,1626,1630,1823,2162,2464,2629,2632,2635`; note `:724,1065,1462,1828,2167,2469` are `flux_elem_OBC`) | Mandatory inline — commit `3cb184edd`: "Otherwise results are incorrect." Was `!NVF$ INLINE` (`4e3f1b758`); changed to Intel FORCEINLINE by `93dbbd36e`. |
 | `flux_elem_OBC` (elemental subroutine) | `:1150` | `!DIR$ ATTRIBUTES FORCEINLINE :: flux_elem_OBC` (`:1149`) | OBC call sites listed above | Same as `flux_elem`; was also listed explicitly in the `-Minline=name:...` flag |
-| `ratio_max` (pure function) | `:3086` | **none at HEAD** (was `!NVF$ INLINE` at `:3085`, removed by `93dbbd36e`) | `!$omp target`/`!$omp loop` in `zonal_mass_flux` (`:768,769,792,793,813,814,833,834,851,852`) and `meridional_mass_flux` (`:1872,1873,1897,1898,1917,1918,1938,1939,1955,1956`) | Originally mandatory-inline (`3cb184edd`); directive since removed — see FABLE-CHECK in §3 |
+| `ratio_max` (pure function) | `:3086` | **none at HEAD** (was `!NVF$ INLINE` at `:3085`, removed by `93dbbd36e`) | `!$omp target`/`!$omp loop` in `zonal_mass_flux` (`:768,769,792,793,813,814,833,834,851,852`) and `meridional_mass_flux` (`:1872,1873,1897,1898,1917,1918,1938,1939,1955,1956`) | Originally mandatory-inline (`3cb184edd`); directive since removed — see §3 |
 | `efp_decompose` (pure subroutine) | `src/framework/MOM_coms.F90:778` (directive `:779`) | `!$omp declare target` | `do concurrent` reduction loop in `increment_block_ints` (`:721-728`) | Per-point EFP bin decomposition inside the reproducing-sum block reduction; must be device-resident since the reduction body is compiled for target |
 | module constants `pr`, `I_pr` | `src/framework/MOM_coms.F90:69` | `!$omp declare target(pr, I_pr)` | referenced from inside `efp_decompose`/reduction body | Data (not code), but same device-residency requirement extends to module-level constant arrays consumed by device code |
 | `cuberoot` (elemental function) | `src/framework/MOM_intrinsic_functions.F90:51` (directive), `:50` (def) | `!$omp declare target` | called from `MOM_barotropic.F90`, EOS files, etc. inside `do concurrent`/`omp target` | Replaces `x**(1/3)` (transcendental `exp/log` lowering) with a deterministic bit-exact iterative kernel; must be device-resident everywhere it's used |
@@ -172,17 +172,15 @@ So at HEAD the `-Minline=pragma` recipe no longer targets `!NVF$ INLINE` (there 
 now driven by the `!DIR$ ATTRIBUTES FORCEINLINE` directive (which nvfortran honours) on the two
 `flux_elem` routines.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** `ratio_max` at HEAD has **no** inline directive and **no** `!$omp declare target`,
-> yet it is still called from inside `!$omp target`/`!$omp loop collapse(2)` regions
-> (`MOM_continuity_PPM.F90:768-769,792-793,…`). Per the "core rule" (§1) and `3cb184edd`'s original
-> "inlining of ratio_max … is MANDATORY … otherwise results are incorrect", this should either be
-> force-inlined or declare-target. How is correctness preserved now? Candidate explanations: (a)
-> nvfortran auto-inlines a tiny `pure` function at `-O2` without a directive; (b) the build still
-> passes an explicit `-Minline=name:ratio_max` (no such flag was found in `.testing/`/`ac/` — check the
-> actual build/CI flags on `dev/gpu`); (c) `ratio_max`'s call sites were restructured by `93dbbd36e`
-> so they no longer land in a device region. Worth confirming against a GPU checksum run, which this
-> agent cannot do. Look at `93dbbd36e`'s full diff around the `zonal_mass_flux` region and the CI
-> compile flags.
+> **Resolved (2026-07-14):** The gap is a deliberate removal resting on implicit device codegen.
+> `93dbbd36e` removed `!NVF$ INLINE` from `ratio_max` without replacement while giving
+> `flux_elem`/`flux_elem_OBC` FORCEINLINE, and **no `-Minline` exists in any in-repo or
+> mkmf-template build config** — so no flag is quietly standing in for the directive. `ratio_max` is
+> still called from `!$omp target`/`loop` regions in `MOM_continuity_PPM.F90`. Correctness at HEAD
+> therefore rests on nvfortran implicitly compiling/inlining a small same-file `pure` function for
+> the device: empirically fine on the tested toolchain (the commit is merged and checksum-gated), but
+> fragile. **Recommendation:** add `!DIR$ ATTRIBUTES FORCEINLINE :: ratio_max` for parity with
+> `flux_elem`. Never imitate the gap in new code.
 
 **Without either the flag or the pragma:** per `3cb184edd`'s commit message, the OpenMP target
 version of `zonal_mass_flux`/`meridional_mass_flux` produces **incorrect results** (not a build
@@ -514,6 +512,8 @@ Verified against source at `dev/gpu` HEAD and git history (source + git only; no
   call-site list mixed in `flux_elem_OBC` sites (`:724,1065,…`) — split out.
 
 **Confidence:** High. Every quoted commit message, doc comment, and line number was re-derived from
-the tree. The one open item is the FABLE-CHECK in §3 (how `ratio_max` stays correct with no inline
-directive and no `declare target` while called from a device region) — unresolvable without a GPU
-checksum run and the actual CI compile flags, neither available to a source-only agent.
+the tree. The former open item — how `ratio_max` stays correct with no inline directive and no
+`declare target` while called from a device region — is resolved in §3: no `-Minline` flag is
+covering for it, so correctness rests on nvfortran's implicit device codegen for a small same-file
+`pure` function, which works on the tested toolchain but should be pinned with an explicit
+FORCEINLINE.

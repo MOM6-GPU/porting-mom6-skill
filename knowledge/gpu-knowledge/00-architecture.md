@@ -383,7 +383,7 @@ offload of the mediator itself is on branch `diag_map_mediator_port`. See `12-di
 Catalogue-worthy so far: mandatory inlining of `ratio_max`/`flux_elem` (`3cb184edd`: "Otherwise
 results are incorrect"; historically via `-Minline=name:`/`!NVF$ INLINE`, at HEAD via
 `!DIR$ ATTRIBUTES FORCEINLINE` on flux_elem/flux_elem_OBC only — `93dbbd36e`; `ratio_max` currently
-carries no directive, see KNOWLEDGE.md §8a item 11), `!$omp declare target` on all point/column
+carries no directive, see KNOWLEDGE.md §8, "`ratio_max`'s missing directive"), `!$omp declare target` on all point/column
 kernels, manual `num_teams` (`5b5f6b2b1`),
 `omp target teams loop -> do concurrent` reversions (`e8b0ecfbf`), `modulo()` avoided in `cuberoot`
 (not implemented on all targets), EOS `_loc` free functions to avoid `this` copies, "implicit copy of

@@ -318,13 +318,12 @@ around commit `5b5f6b2b1`'s under-launch bug), this branch relies entirely on `d
 `!$omp target teams num_teams(...)` anywhere in the diff — so if nvfortran under-launches teams
 for the 5×/15×-widened `T5`/`T15`/etc. arrays the way it did for continuity, that workaround has not
 yet been ported over here. Flag for whoever picks this up for merge.
->
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** does the PLM density-integral hot path actually need continuity's manual
-> `num_teams(ceiling(...))` workaround, or does the tile geometry here (a `5*TILE_SIZE_X` inner
-> dimension) keep nvfortran's default team launch adequate? Look at whether any surviving
-> `!$omp target teams loop` in `int_density_dz_generic_plm` / `PressureForce_FV_Bouss` on
-> `port/pressureforce-benchmark_ALE` carries an explicit team count, and compare against the
-> under-launch symptom that motivated `5b5f6b2b1` in continuity.
+
+> **Open (reviewed 2026-07-14):** does the PLM density-integral hot path actually need continuity's
+> manual `num_teams(ceiling(...))` workaround, or does the tile geometry here (a `5*TILE_SIZE_X` inner
+> dimension) keep nvfortran's default team launch adequate? The review could not settle this from
+> source — it needs a benchmark of the PLM kernel against the under-launch symptom that motivated
+> `5b5f6b2b1` in continuity. See KNOWLEDGE.md §9.
 
 ---
 
@@ -338,13 +337,11 @@ yet been ported over here. Flag for whoever picks this up for merge.
 | Roquet_rho diff-from-fork | +77 | +158/−16 (deeper — but its diff-from-fork *also* absorbs the `8eb41475b` EOS-merge equivalent that bodner instead folds into the PLM-lineage commits) |
 | **Closer to merge-quality on this shared file** | — | **Marginally.** The only substantive edges are the benchmarked-down block defaults and the `desubmodule` cleanup; the k-blocking body (incl. the recurrence-direction fix) is identical on both. |
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** is `port/pressureforce-benchmark_ALE` genuinely the more merge-ready branch on the
-> shared PLM code, or merely *different*? Once the fabricated "defensive-directive removal" and
-> "guard-narrowing" evidence is discounted (see §3 correction), pf's only edges are the `0x1` CPU
-> default and the `desubmodule`. Whether `0x1` beats `32x4` on CPU, and whether desubmoduling is the
-> intended end-state (both branches, and a sibling project-wide branch, treated the submodule split
-> as provisional — see §5), needs a benchmarking/maintainer judgment this source-only study can't
-> settle.
+> **Open (reviewed 2026-07-14):** is `port/pressureforce-benchmark_ALE` genuinely the more merge-ready
+> branch on the shared PLM code, or merely *different*? Its only edges are the `0x1` CPU default and
+> the `desubmodule`. The review could not settle this from source — it needs a benchmark (does `0x1`
+> beat `32x4` on CPU?) and a maintainer decision on whether desubmoduling is the intended end-state.
+> See KNOWLEDGE.md §9.
 
 The one thing `bodner-naive-port` has that the other branch doesn't touch at all is the actual
 **Bodner MLE port** — but that work, per §1, is the naive contrast case, not a competing
@@ -557,6 +554,6 @@ Verified by an Opus agent against `git` (branches `bodner-naive-port`, `port/pre
    Roquet_rho pf diff `+158/−16`.
 
 **Confidence:** High on all branch-forensics (patch-id, timestamps, file diffs re-derived
-independently). High on the §2/§3/§5 code-content confirmations (read on the branch blobs). The two
-`FABLE-CHECK` markers flag genuinely benchmark-dependent judgments (team-launch adequacy; whether pf
+independently). High on the §2/§3/§5 code-content confirmations (read on the branch blobs). The open
+items in §3 and §4 are genuinely benchmark-dependent judgments (team-launch adequacy; whether pf
 is materially more merge-ready) that a source-only study cannot settle.

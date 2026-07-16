@@ -121,12 +121,15 @@ end subroutine do_group_pass
 aware MPI send/recv directly on device pointers, vs. staging through a host buffer) cannot be
 inspected here — only the MOM-side call contract.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The whole "device-resident, no host round-trip" claim for `omp_offload=.true.`
-> rests on what the *external* FMS `mpp_do_group_update(..., omp_offload)` overload actually does with
-> the flag — this repo only shows the flag being forwarded (`MOM_domain_infra.F90:1158`). Confirm in
-> the linked FMS version that the offload path genuinely issues CUDA-aware MPI on device pointers (and
-> does not silently fall back to internal host staging on stacks without GPUDirect), since the MOM-side
-> code deliberately removed its own staging on the assumption that it does. Note this parameter exists **only** in the FMS2
+> **Resolved (2026-07-14):** the FMS `omp_offload` path is a genuine device path with **no** fallback.
+> In the sibling FMS checkout, `mpp_group_update.fh` device-packs halos (`target teams distribute …
+> if(use_device_ptr)` into a device buffer) and `mpp_transmit_mpi.fh` posts `MPI_ISEND`/`IRECV` inside
+> `!$omp target data use_device_ptr(...)` — real CUDA-aware MPI on device pointers. There is no
+> capability check: a non-GPUDirect MPI stack means a crash or corruption, **not** graceful host
+> staging. The nonblocking variants hardcode `use_device_ptr = .false. ! placeholder`, which confirms
+> the gated/unconditional split in §4 from the FMS side.
+
+This parameter exists **only** in the FMS2
 infra shim; `config_src/infra/FMS1/MOM_domain_infra.F90:1144` still has the old
 `do_group_pass(group, MOM_dom, clock)` signature with no `omp_offload`. `ac/configure.ac:238-241`
 auto-selects FMS2 vs FMS1 based on whether the linked FMS provides `fms2_io_mod`, so a GPU build
@@ -743,16 +746,11 @@ run. Line/commit references below were re-derived independently of the original 
   registry-like structs; (9.4) `reduce` locality-spec rule (scalar-temp workaround); (9.5) why single-
   GPU correctness is insufficient. All grounded in the citations verified above.
 
-### FABLE-CHECK markers
-
-- **1** marker (§2.1): whether the external FMS `mpp_do_group_update(..., omp_offload)` overload truly
-  does device-pointer CUDA-aware MPI (vs. internal host staging) — unverifiable from this repo, and the
-  load-bearing assumption behind the removed MOM-side staging.
-
 ### Confidence
 
 **High** for everything checked directly against source/git (all §§1–7 code excerpts, the two commits,
-the 26-site table, the gated/unconditional split, the corrected counts). **Medium** for claims resting
-on the external FMS library (the single FABLE-CHECK) and for the *inferred* "why only multi-GPU"
+the 26-site table, the gated/unconditional split, the corrected counts). Also **high** for the claims
+resting on the external FMS library: the `omp_offload` device path has since been verified against the
+FMS source (§2.1). **Medium** for the *inferred* "why only multi-GPU"
 causal mechanisms in §7, which the draft already flags as inference from Fortran/compiler semantics
 rather than from commit messages — that framing is appropriate and left as-is.

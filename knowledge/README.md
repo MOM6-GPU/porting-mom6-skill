@@ -24,7 +24,7 @@ do not rot — prefer them where both are available.
 
 ## The confidence markers are load-bearing
 
-`KNOWLEDGE.md` §8a and §8b record, per claim, which were **verified from source**, which are
+`KNOWLEDGE.md` §8 and §9 record, per claim, which were **verified from source**, which are
 **advanced but need a run or a profile to close**, and which are **open maintainer decisions**. The
 same distinction appears in the bug notes. That grading is the most valuable thing in here — please
 preserve it when editing rather than flattening everything to assertion.

@@ -166,7 +166,7 @@ Then:
 6. **Prerequisites** — EOS forms, in-flight branches to merge first, dependency-order items.
 7. **Sequenced commits, each with its gate.**
 8. **Open questions** — things needing a run, a profile, or a maintainer decision. Say so rather
-   than guessing; §8a/§8b show which questions source-reading genuinely cannot close.
+   than guessing; §8 and §9 show which questions source-reading genuinely cannot close.
 
 ## Anti-patterns
 

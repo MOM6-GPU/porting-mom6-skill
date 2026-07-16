@@ -393,11 +393,10 @@ profile. So the claim "nvfortran serializes independent `do concurrent` kernels 
 overlap" is an *inference from the shape of the intervention* (someone bothered to hand-assign queues),
 not a measured result. State it as a hypothesis, not a finding.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Does nvfortran actually launch consecutive `do concurrent` loops on a single
-> in-order CUDA stream (making logically-independent loops serialize), such that OpenACC `async(N)`
-> queues are the intended remedy? This is the load-bearing assumption of §5 and can only be settled by
-> an NVHPC-runtime/`nsys` timeline, not by the repo. Look for any profiling notes on
-> `edoyango/acc-btstep` or `benchmark_ALE_nvtx_clocks` before repeating the serialization claim as fact.
+> **Reviewed 2026-07-14 (open):** NVHPC's documented model launches `do concurrent` kernels on the
+> default CUDA stream per host thread, so serialization of independent kernels is *expected* — which
+> is exactly what `acc-btstep`'s `async(1..3)` queues attack. Confidence is high, but quantify with
+> one `nsys` timeline of btstep before investing. See KNOWLEDGE.md §9.
 
 ---
 
@@ -551,10 +550,6 @@ conditional-map-on-optional hazard, checksum-transfer tax, all-or-nothing wide-h
 `do concurrent`-for-compute / OpenMP-for-data split); added an "evidence discipline" paragraph to §5
 separating what the `acc-btstep` diff proves (additive, counts) from the unmeasured performance
 inference.
-
-**FABLE-CHECK markers:** 1 — on the load-bearing §5 assumption that nvfortran serializes independent
-`do concurrent` kernels onto one stream (the premise that motivates the async experiment), which is not
-settleable from source and needs an NVHPC/`nsys` timeline.
 
 **Confidence:** High. Every line number, commit hash, diff, and directive count in the document was
 checked against the tree and matched (modulo the three minor corrections above). The one genuinely

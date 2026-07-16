@@ -17,7 +17,7 @@ re-run them if the tree has moved, rather than trusting this table.
 
 `MOM_restart.F90` does **no transfer of its own**. Restart staleness is currently latent, not live,
 only because the sync-point blanket `update from(u, v, h, CS%uhtr, CS%vhtr)` at `MOM.F90:1091` runs
-under the same condition the driver writes restarts under (`knowledge/KNOWLEDGE.md` §8a item 17). Any
+under the same condition the driver writes restarts under (`knowledge/KNOWLEDGE.md` §8, "restart staleness is latent, not live"). Any
 *newly* device-resident restart-registered field you add must be added to a dominating
 `update from` before `save_restart`.
 
@@ -25,7 +25,7 @@ under the same condition the driver writes restarts under (`knowledge/KNOWLEDGE.
 
 | Call | Verdict | Why |
 |---|---|---|
-| `do_group_pass(group, dom, omp_offload=.true.)` | **DEVICE** — no transfer needed | forwards to FMS `mpp_do_group_update`, which device-packs halos and posts `MPI_ISEND`/`IRECV` under `!$omp target data use_device_ptr(...)` — real CUDA-aware MPI on device pointers, with **no host-staging fallback** (§8a item 15) |
+| `do_group_pass(group, dom, omp_offload=.true.)` | **DEVICE** — no transfer needed | forwards to FMS `mpp_do_group_update`, which device-packs halos and posts `MPI_ISEND`/`IRECV` under `!$omp target data use_device_ptr(...)` — real CUDA-aware MPI on device pointers, with **no host-staging fallback** (§8, "FMS `omp_offload` is a genuine device path") |
 | `do_group_pass(...)` **without** the flag | HOST | bracket it `update from` / `update to` |
 | `pass_var`, `pass_vector` | **HOST** — always | no `omp_offload` argument exists on these entry points |
 | `start_group_pass` / `complete_group_pass` | **HOST** — always | the nonblocking path hardcodes `use_device_ptr = .false. ! placeholder` in FMS |
@@ -39,7 +39,7 @@ grep -n "omp_offload" config_src/infra/FMS2/MOM_domain_infra.F90
 
 ⚠ 14 of the 26 `omp_offload=.true.` sites are gated behind `if (G%nonblocking_updates)` and revert
 to the host-staged branch when it is on — so the *same call site* is a host boundary or not
-depending on a runtime parameter (`knowledge/KNOWLEDGE.md` §8 item 21, open). If your analysis depends on a
+depending on a runtime parameter (`knowledge/KNOWLEDGE.md` §9, "`NONBLOCKING_UPDATES` policy", open). If your analysis depends on a
 gated site, say which branch you assumed.
 
 ## Host-only by call type

@@ -4,8 +4,8 @@
 > context, tasked with continuing — or finishing — the GPU port. This file is the operational
 > playbook: identity and ground rules, a compact architecture orientation, the end-to-end porting
 > procedure, decision rules, a symptom→fix debugging index, the prioritized work queue, the
-> proven-works and never-do inventories, and the open questions queued for strongest-model review.
-> Depth lives in `docs/gpu-knowledge/00-…14-*.md` (index in §9); every load-bearing rule here is
+> proven-works and never-do inventories, the verified findings, and the genuinely open questions.
+> Depth lives in `docs/gpu-knowledge/00-…14-*.md` (index in §10); every load-bearing rule here is
 > inlined with its citation so you can act without opening the deep docs, and every section links
 > to them for the full evidence.
 >
@@ -225,8 +225,9 @@ For every procedure called from inside a device region:
 4. **Directive state at HEAD:** force-inline is `!DIR$ ATTRIBUTES FORCEINLINE :: <name>`
    (`MOM_continuity_PPM.F90:1086,1149`; `93dbbd36e`). There are **zero** `!NVF$ INLINE` directives
    left in the tree (that form and the `-Minline=name:` flag list are historical). `ratio_max`
-   currently has *no* directive — an open question (§8 item 11); do not imitate that gap in new
-   code.
+   currently has *no* directive — a deliberate removal that rests on implicit device codegen
+   (§8, "`ratio_max`'s missing directive"); add `FORCEINLINE` for parity, and do not imitate the
+   gap in new code.
 5. `declare target` placement: after all declarations, before the first executable
    (`MOM_set_viscosity.F90` even repeats it harmlessly). Same-module vs cross-module is irrelevant
    — the boundary is the lexical scope of the `target` construct.
@@ -272,10 +273,10 @@ DEALLOC_(CS%x)
   back — host-needed values require `update from`/`map(from:)` first.
 - **`delete` vs `release` (load-bearing):** `delete` forces the refcount to zero — a per-call
   `delete` inside a callee destroys any outer persistent mapping of the same object (live example:
-  `MOM_vert_friction.F90:1105` kills `MOM.F90:3190`'s ADp map; §8b finding B). Use `release` for
+  `vertvisc`'s delete kills `initialize_MOM`'s ADp map; §8, "The `ADp` mapping lifecycle"). Use `release` for
   scoped/per-call teardown; `delete` only in the owning `*_end`. And **a `map(to:)` on an
   already-present object does not refresh device contents** — refresh is `update to(...)` only
-  (§8b finding C).
+  (§8, "A `map(to:)` on an already-present object does not refresh device contents").
 - **Flatten arrays-of-structs:** never map a derived-type array whose elements each hold an array,
   inside a loop — one attach/detach per element (`1865612de` halved GPU time by flattening
   `type(p2d), dimension(SZJ_)` to a flat 3-D array, +20% memory). The tolerated exception is the
@@ -300,7 +301,7 @@ answers).
   `create_group_pass(CS%pass_x, field, G%Domain, halo=<stencil>)` (batch several fields on one
   handle = one MPI message), replace with `do_group_pass(CS%pass_x, G%Domain, omp_offload=.true.)`.
   Preconditions: fields already `enter data`-mapped; FMS2 build (the flag forwards to the external
-  FMS `mpp_do_group_update` — §8 item 15).
+  FMS `mpp_do_group_update` — §8, "FMS `omp_offload` is a genuine device path").
 - **Size `halo=` to the consuming stencil**, not reflexively `NIHALO_=2` (`pass_eta` uses
   `halo=1`); if your port widens a stencil, widen the pass (doc 11 §9.2).
 - The nonblocking path (`start_group_pass`/`complete_group_pass`) has **no** offload awareness:
@@ -330,7 +331,7 @@ answers).
 - **Every debug checksum on a mapped array needs its own `update from` immediately upstream** — a
   transfer for a *different* array does not cover it (`b29b27150`; doc 07 §5.2). Restart-registered
   device-mutated arrays need a dominating transfer before `save_restart` (`MOM_restart.F90` does
-  none of its own; doc 12 §6, §8 item 17).
+  none of its own; doc 12 §6, and §8, "Restart staleness is latent").
 - The derived-type deep-copy trap: touching `CS%tv%T` through the container in an offload
   pass materializes many small implicit transfers — wrap in an explicit
   `map(to: CS%tv, CS%tv%T, CS%tv%S)` bracket or alias to a bare pointer first (`ff86497d5`).
@@ -455,7 +456,7 @@ Consolidated from doc 13 (§1/§1a) plus the mapping/multi-GPU failure modes of 
 ⚠ Row 7's bug shape is only *partially* fixed at HEAD: six sibling early-`exit`-under-DC sites
 remain (`MOM_tracer_hor_diff.F90:911,913`; `MOM_tracer_advect.F90:287,292`;
 `MOM_vert_friction.F90:700,929`) — treat as latent until checksum-validated under ≥25.11
-(§8b finding A).
+(§8, "Six early-`exit`-under-`do concurrent` sites remain at HEAD").
 
 NVHPC versions on record: **25.5** (A100 conditional-map crash), **25.9** (DC wrong result),
 **25.11** (early-exit miscompile). `__NVCOMPILER_OPENMP_GPU` is the compile-time GPU-build switch
@@ -497,7 +498,7 @@ independent warm-ups.
    sizing, `class(Recon1d)` dispatch, deep call chains). *Not a blank slate:*
    `origin/jorge/diagnostics_port` tags the whole non-polymorphic OM4 chain `!$omp declare target`
    and adds `NK_GPU_MAX=500` fixed sizing (`MOM_remapping.F90:47,1275-1277`) — routines are
-   device-*callable*, not yet device-*driven*. *Next:* resolve §8 item 19, then add the driving
+   device-*callable*, not yet device-*driven*. *Next:* resolve the `NK_GPU_MAX` sizing question (§9), then add the driving
    `do concurrent(j,i)` at `MOM_ALE.F90:745`, then bitwise-validate. Treat as research-grade.
 7. **`MOM_regridding.F90`** — integer select-case dispatch, no polymorphism; standard template
    should apply; zero in-flight work.
@@ -519,7 +520,7 @@ independent warm-ups.
     mask/downsample/conversion paths; the FMS write path stays host). 12. **k-block completion** —
     land `kblock-hor-visc` (watch the declaration-order CPU-perf lesson) and the remaining
     CorAdCalc TODO bodies (OBC/WENO). 13. **btstep tuning** — evaluate the `acc-btstep` async
-    hypothesis (§8 item 12) before investing. 14. **Restart path** — keep host-only (`noport`
+    hypothesis (§9, "single-stream serialization") before investing. 14. **Restart path** — keep host-only (`noport`
     class); enforce the dominating-transfer rule instead. 15. **Port-coverage tooling** — adopt
     `edoyango/gpu-port-tracking` (`.testing/tools/track_gpu_port.py`, `!@start noport/toport`
     sentinels) as the objective progress metric.
@@ -578,318 +579,180 @@ independent warm-ups.
 12. **Never map arrays-of-structs element-by-element in a loop** on a hot path (`1865612de`).
 13. **Never leave an enter-data without its mirrored exit-data** (`15ca2a25f`), never expect
     `delete`/`release` to copy back, and **never `map(delete:)` an object your scope does not
-    own** — it zeroes the refcount and destroys outer mappings (§8b finding B).
+    own** — it zeroes the refcount and destroys outer mappings (§8, "The `ADp` mapping lifecycle").
 14. **Never ship a port without the bitwise checksum gate and a ≥2-GPU run** (§3 Step 9).
 15. **Never hand-roll a reproducible float sum** — use `reproducing_sum`/EFP (doc 07 §6.1).
 
 ---
 
-## 8. Open questions for Fable review
+## 8. Verified findings
 
-All inline `> **FABLE-CHECK:**` markers from docs 01–14, verbatim (lightly re-wrapped), with
-locations; items 20–22 are added by the integrating architect. **The Fable review pass has run:
-see §8a for per-item resolutions and §8b for new findings — read those before re-investigating
-any item below.**
+Settled by a source-and-git review pass (2026-07-14; no builds or runs). State these as fact; do not
+re-derive them. Anything still genuinely unknown lives in §9.
 
-1. **[01 §2, `01-memory-control-structures.md:199`]** "Is the device copy of `GV%Rlay`/`GV%g_prime`
-   (mapped at `MOM.F90:3650`) actually consumed by device kernels, or is it a vestigial/incomplete
-   map? The disabled sibling at `:3057` ('This does not work. GV%RLay changes sometime later.')
-   suggests GV-on-device has a fraught history; confirm which kernels read `GV%Rlay`/`GV%g_prime`
-   on device before treating this map as load-bearing." *(low)*
-2. **[01 §6.1, `:618`]** "The 'partial presence' mechanism described here (one member of `CS`
-   present on device while a sibling needed by the same region is absent, which nvfortran cannot
-   reconcile) is an inference; the commit message only says 'ambiguous partial presence errors with
-   fields on the top-level CS in associated work.' Confirm this is the actual nvfortran failure
-   mode (vs. e.g. a whole-struct-vs-member aliasing conflict) before relying on it as a general
-   rule." *(medium)*
-3. **[02 §5.2, `02-pointer-usage.md:305`]** "The precise OpenMP/nvfortran semantics behind this
-   'second `map(to:)` clobbers member attachments' claim deserve the strongest-model check. Under a
-   strict OpenMP 5.x reading, a `map(to:)` on a variable already present should only bump the
-   reference count… Is the correct root-cause framing '(i) nvfortran does not honor present-check
-   semantics for derived types with allocatable/pointer components and re-copies the descriptor',
-   or '(ii) the two directives mapped different storage so refcounts/attach state genuinely
-   diverged'? The distilled porting rule holds either way, but the *why* should be stated correctly
-   for the compiler-workarounds doc." *(medium)*
-4. **[02 §6, `:377`]** "`CS%ADp` is mapped with `map(alloc: CS%ADp)` at `MOM.F90:3190` (an
-   all-pointer `accel_diag_ptrs`), while `associated(ADp%sal_u)` etc. are read for control flow in
-   `MOM_PressureForce_FV.F90:913-931/:2044-2058`. This is the exact `map(alloc:)`-on-a-pointer-
-   struct shape that `a774eb331` identified as a multi-GPU bug for `Reg%Tr(:)`. Is `CS%ADp` a
-   latent version of the same bug, or safe — (a) because those reads execute host-side, or (b)
-   because the parent's descriptors are never dereferenced on device? Should it be `map(to:)` for
-   safety?" *(HIGH — potential live multi-GPU bug)*
-5. **[03 §3.5, `03-openmp-mapping.md:475`]** "Is the `delete` vs `release` split genuinely
-   load-bearing (reference-count correctness) or merely stylistic convention? … Worth confirming
-   against one multiply-mapped case (e.g. `CS` itself, entered at `MOM_tracer_hor_diff.F90:209`
-   and released at `:723`, but possibly also shell-mapped by a caller) before presenting the split
-   as a hard rule." *(low)*
-6. **[04 §1, `04-do-concurrent-patterns.md:34`]** "The 'degrades toward CPU-safe but does not
-   GPU-parallelize the flagged locals' semantics is an inference about compiler behaviour when a
-   bare `do concurrent` carries implicit locality — not verifiable from MOM6 source or git. …
-   Confirm the actual codegen consequence against the F2018 standard / nvfortran docs before
-   relying on it." *(low)*
-7. **[04 §4.4, `:390`]** "The generalization 'a whole array (`block_sum`) is a valid `reduce()`
-   target but an indexed element (`max_srt(j)`) is not' is inferred from two data points… That
-   whole-array reduction is positively supported (vs. merely happening to be written that way) is
-   a reasonable but not-independently-confirmed reading. Sanity-check against nvfortran's actual
-   `do concurrent reduce` support matrix before treating 'whole-array reduce is fine' as a portable
-   rule." *(medium)*
-8. **[05 §3(4), `05-kblocking-tiling.md:438`]** "Is there a primary source (commit message, code
-   comment, or issue) that *directly* states missing inline of `flux_elem`/`ratio_max` produced
-   wrong numerical answers (as opposed to a slowdown)? `00-architecture.md` §7.5 asserts 'mandatory
-   or wrong answers,' but I could not locate the originating evidence in git log/source — check the
-   PR discussion for #165 and the history of `4e3f1b758`/the `-Minline` flag in the build config."
-   *(medium — couples with item 11)*
-9. **[06 §2.3, `06-eos-layer.md:265`]** "The Wright anomaly branch (`:1013, :1053`) is the one
-   place a device `do concurrent` body still literally passes `this`. Confirm whether this is
-   deliberate (a form the ported PressureForce path never exercises with `rho_ref` present) or an
-   oversight. Roquet shows the `_loc` fix is trivially available, so if any GPU code path reaches
-   `calculate_density_array_2d/3d_buggy_Wright` *with* `rho_ref`, this is a live correctness bug.
-   Look at callers of `calculate_density(..., rho_ref=...)` for `EOS_WRIGHT` in
-   `MOM_density_integrals.F90` / `MOM_PressureForce_FV.F90`." *(HIGH — potential live bug)*
-10. **[07 §6.3, `07-reproducibility.md:568`]** "Does the port depend on nvfortran and the CPU
-    reference compiler making the *same* FMA-contraction choices for CPU-vs-GPU bit-identity to
-    hold? Check whether any build actually pins contraction (search build configs for
-    `-ffp-contract`, `-Mnofma`, `-fma`, `Kieee`) — if not, CPU↔GPU checksum agreement may be
-    relying on the two toolchains happening to contract identically, which is fragile. Ground truth
-    is the flags the `dev/gpu` GPU build harness actually passes (not in this repo's `ac/`)."
-    *(HIGH — foundational to the verification gate)*
-11. **[08 §3, `08-cross-module-inlining.md:175`]** "`ratio_max` at HEAD has **no** inline directive
-    and **no** `declare target`, yet it is still called from inside `!$omp target`/`loop`
-    regions (`MOM_continuity_PPM.F90:768-769,…`). Per the core rule and `3cb184edd`'s 'MANDATORY …
-    otherwise results are incorrect', how is correctness preserved now? Candidates: (a) nvfortran
-    auto-inlines a tiny `pure` function at -O2; (b) the build still passes `-Minline=name:ratio_max`
-    (not found in `.testing/`/`ac/` — check actual CI flags); (c) call sites restructured by
-    `93dbbd36e` off the device path. Look at `93dbbd36e`'s full diff and the CI compile flags."
-    *(HIGH — potential silent-wrongness regression at HEAD)*
-12. **[09 §5, `09-barotropic-solver.md:396`]** "Does nvfortran actually launch consecutive
-    `do concurrent` loops on a single in-order CUDA stream (making logically-independent loops
-    serialize), such that OpenACC `async(N)` queues are the intended remedy? This is the
-    load-bearing assumption of §5 and can only be settled by an NVHPC-runtime/`nsys` timeline.
-    Look for profiling notes on `edoyango/acc-btstep` or `benchmark_ALE_nvtx_clocks` before
-    repeating the serialization claim as fact." *(medium)*
-13. **[10 §3, `10-inflight-ports.md:322`]** "Does the PLM density-integral hot path actually need
-    continuity's manual `num_teams(ceiling(...))` workaround, or does the tile geometry here (a
-    `5*TILE_SIZE_X` inner dimension) keep nvfortran's default team launch adequate? Look at whether
-    any surviving `target teams loop` in `int_density_dz_generic_plm`/`PressureForce_FV_Bouss` on
-    `port/pressureforce-benchmark_ALE` carries an explicit team count, and compare against the
-    under-launch symptom that motivated `5b5f6b2b1`." *(low)*
-14. **[10 §4, `:341`]** "Is `port/pressureforce-benchmark_ALE` genuinely the more merge-ready
-    branch on the shared PLM code, or merely *different*? … pf's only edges are the `0x1` CPU
-    default and the `desubmodule`. Whether `0x1` beats `32x4` on CPU, and whether desubmoduling is
-    the intended end-state, needs a benchmarking/maintainer judgment this source-only study can't
-    settle." *(low)*
-15. **[11 §2.1, `11-halos-domains-multigpu.md:124`]** "The whole 'device-resident, no host
-    round-trip' claim for `omp_offload=.true.` rests on what the *external* FMS
-    `mpp_do_group_update(..., omp_offload)` overload actually does with the flag — this repo only
-    shows the flag being forwarded. Confirm in the linked FMS version that the offload path
-    genuinely issues CUDA-aware MPI on device pointers (and does not silently fall back to internal
-    host staging on stacks without GPUDirect), since the MOM-side code deliberately removed its own
-    staging on the assumption that it does." *(HIGH — correctness+perf of every halo exchange)*
-16. **[12 §3, `12-diagnostics-io.md:243`]** "The rewritten `diag_remap_calc_hmask`/`downsample_*`
-    routines now *assume* their array arguments are already device-resident … and do no transfer
-    themselves. Confirm every caller on `origin/diag_map_mediator_port` actually establishes that
-    residency — a caller that hands in a host-only array would read uninitialized device memory
-    silently. … Check the `h` argument threaded into `diag_remap_calc_hmask` is likewise mapped at
-    every call site, not just the mask." *(medium — gate before merging that branch)*
-17. **[12 §6, `:419`]** "The 'would silently write stale host memory' risk is an *inference*, not
-    an observed bug. Confirm it: locate the actual `save_restart` write call sites and check
-    whether each is dominated by a preceding `target update from(...)` covering every registered
-    device-resident field (not just `u,v,h,uhtr,vhtr`). If a restart-registered array that is
-    *only* written on device (e.g. `Kd_shear`/`MLD`) has no transfer before the write, the risk is
-    real *today*; if all restart writes happen at sync points already covered by blanket transfers,
-    it is only a latent trap for future ports." *(HIGH — potential silent restart corruption)*
-18. **[13 row 17, `13-compiler-workarounds.md:125`]** "Does the commit `f74525ae8` message 'We lose
-    present()' refer to the **OpenACC `present()` data clause** (which asserts device residency
-    and has no direct OpenMP-target equivalent) rather than the Fortran `present(optional_arg)`
-    intrinsic? The diff drops several `!$acc … present(...)` clauses while converting `!$acc` →
-    `!$omp`, which points at the data clause. If so, the entire #17-↔-#16 'foreshadowing' narrative
-    is a conflation of two unrelated meanings of `present()` and should be deleted, not merely
-    softened." *(low — historiography)*
-19. **[14 §7.3, `14-vertical-physics-ale-status.md:523`]** "Is the `diagnostics_port` strategy (OM4
-    select-case path + blanket `declare target` + `NK_GPU_MAX=500` fixed sizing) the right
-    long-term direction, or a dead end? (1) `NK_GPU_MAX=500` over-allocates every column to 500
-    layers of private stack per thread — check whether that blows the device stack/register budget
-    for realistic `GV%ke` (~75), vs. sizing at `GV%ke`; (2) the OM4 path still `select case`s over
-    ~9 reconstruction kinds per column — confirm nvfortran handles that branch divergence
-    acceptably inside a `target teams loop`." *(HIGH — gates the ALE remap plan, Tier-2 item 6)*
+**The `ADp` mapping lifecycle is internally inconsistent.** At HEAD, `initialize_MOM` (`MOM.F90`)
+maps `CS%ADp` persistently with `enter data map(alloc:)` — refcount 1, device copy a garbage shell.
+The first `vertvisc` (`MOM_vert_friction.F90`) call does `enter data map(to: ADp)`; it is already
+present, so the refcount goes to 2 and **the `to` copy is skipped**, leaving the shell garbage. Only
+the explicitly attach-mapped `du_dt_str`/`dv_dt_str` get valid device descriptors — the sole reason
+the device-side `associated(ADp%…)` reads in `vertvisc` are safe. The matching
+`exit data map(delete: ADp)` then **forces the refcount to 0**, destroying `initialize_MOM`'s
+mapping; every later `vertvisc` call re-creates the shell fresh, now with a real `to` copy. Net: the
+init-time map is dead weight that suppresses the first call's shell refresh and is then silently
+destroyed. Fix (maintainer's choice): either drop the init-time map and let `vertvisc` own the
+per-call lifecycle with `release`, or make the init-time map authoritative (`map(to:)` + per-call
+`update to(ADp)`, no per-call delete). Do **not** `map(to:)` the shell in `initialize_MOM` — that
+was proposed and is wrong.
 
-**Added by the integrating architect:**
+**A `map(to:)` on an already-present object does not refresh device contents.** If a struct's host
+scalars or descriptors changed since its first map, the only refresh is `target update to(...)`.
+Several existing patterns rely on this implicitly; new code must never "re-map to refresh".
 
-20. **FABLE-CHECK [architect]: `00-architecture.md` contains known-stale claims superseded by the
-    verified docs.** Its §7.5 still lists "`!NVF$ INLINE` … mandatory or wrong answers" and "3
-    `!$omp declare target` [inline] sites" (superseded by doc 08: zero `!NVF$ INLINE` at HEAD,
-    FORCEINLINE on two routines, none on `ratio_max`), its §6.1 cites `configure.ac:172` (doc 04
-    corrected to `:173`) and 167 exit-data (doc 03: 168), and its §7.3 says "~25 call sites"
-    (doc 11: exactly 26, 14 gated/12 unconditional). Decide whether to patch 00 in place or leave
-    it with a superseded-by banner — agents reading 00 first will otherwise re-propagate the stale
-    directive story. *(medium — knowledge-base hygiene; this file already states the corrected
-    facts.)*
-21. **FABLE-CHECK [architect]: what is the intended runtime setting of `NONBLOCKING_UPDATES` for
-    GPU production runs?** 14 of 26 GPU-aware halo sites silently revert to host-staged
-    communication when it is enabled (doc 11 §4). If GPU configs are expected to run with it off,
-    that should be documented (and possibly asserted at init when `__NVCOMPILER_OPENMP_GPU` builds
-    detect it on); if on, the 14 gated sites are a standing performance trap. Needs a maintainer
-    decision + a param-doc note. *(medium)*
-22. **FABLE-CHECK [architect]: is there a strategy decision on the EOS endgame** — continue the
-    per-form `_loc` boilerplate for the remaining 7 forms (including the default `Wright_full`),
-    or adopt the polymorphism-free `select case (form_of_EOS)` dispatch sketched (as a proposal
-    only) in doc 06 §6.4? The residual `this`-descriptor copy (item 2 above, doc 06 case-2) is
-    structural under the current design; the `select case` route removes it once for all forms.
-    Upstream PR #156 / `eos-3d` branches may already answer this — check before an agent invests
-    in 7 more `_loc` conversions. *(medium — shapes Tier-2 item 10.)*
+**`delete` vs `release` is load-bearing, in the dangerous direction.** `exit data map(delete:)`
+forces the refcount to zero, so a per-call `delete` inside a callee destroys any outer, persistent
+mapping of the same object — as `vertvisc`'s delete kills `initialize_MOM`'s `ADp` map on the first
+call. Rule: `release` for scoped/per-call teardown; `delete` only in the owning `*_end` routine that
+mirrors the owning `enter data`. Never `map(delete:)` an object your scope does not own.
+
+**"Partial presence" is the literal NVIDIA runtime diagnostic.** The NVHPC OpenMP/OpenACC runtime
+raises a FATAL "partially present" error when a mapping's address range partially overlaps an
+existing present-table entry — exactly the whole-struct-over-attached-member overlap the docs
+inferred. Rely on it.
+
+**`c82e1254a`'s root cause was re-allocated storage, not a refcount subtlety.** The host
+re-allocated `CS%visc`, so the second `map(to:)` targeted *different* storage than the first,
+orphaning member attachments. The "map the parent exactly once" rule guards against this regardless
+of which reading of the OpenMP spec you take.
+
+**The `GV` device map is load-bearing, not vestigial.** `GV%Rlay` is read inside a device
+`do concurrent` — the `Rml_max`-vs-`GV%Rlay` binary density search in `tracer_epipycnal_ML_diff`
+(`MOM_tracer_hor_diff.F90`) — so `initialize_MOM`'s `map(to: GV, GV%Rlay, GV%g_prime)` is consumed.
+
+**Six early-`exit`-under-`do concurrent` sites remain at HEAD; `e23d6a7b1` fixed only one.** NVHPC
+25.11 produced wrong answers from an early `exit` in a loop nested inside a DC (never-do #6), yet the
+identical shape survives in `tracer_epipycnal_ML_diff` (`MOM_tracer_hor_diff.F90`, the binary-search
+`exit`s — the *same subroutine* as the fixed insert-sort), `advect_tracer` (`MOM_tracer_advect.F90`,
+the `domore` search loops), and `vertvisc` (`MOM_vert_friction.F90`, the `direct_stress` column
+loops, which also contain the device-side `associated(ADp%…)` reads). The ban is **empirical per
+NVHPC version**, not structural — doc 04 §5.5 branch 5 cites an acceptable serial-k early-exit inside
+a DC, which is why the knowledge base previously contradicted itself here. Until each site is
+checksum-validated under ≥25.11, treat all six as latent wrong-answer bugs and apply the `e23d6a7b1`
+if-guard rewrite opportunistically. (`direct_stress` and `tracer_epipycnal_ML_diff` are non-default
+code paths, which is likely why nothing has tripped.)
+
+**Rejecting an array-element `reduce` is conforming F2023, not an nvfortran quirk.** A
+locality-spec/reduce list takes *variable names*; `max_srt(j)` is an array element, not a variable.
+Whole-array `reduce(+: block_sum)` is conforming and positively supported. The staged-scalar
+workaround stays correct.
+
+**"Inline or wrong answers" has a primary source: `3cb184edd`'s commit body** — "for OpenMP,
+inlining of ratio_max and flux_elem is MANDATORY … Otherwise results are incorrect." This is
+era-specific evidence (the OpenACC→OpenMP translation, pre-`num_teams`-fix kernel), not a timeless
+law — but treat it as binding for new code.
+
+**`ratio_max`'s missing directive is a deliberate removal resting on implicit device codegen.**
+`93dbbd36e` removed `!NVF$ INLINE` from `ratio_max` without replacement (while giving
+`flux_elem`/`flux_elem_OBC` `FORCEINLINE`), and no `-Minline` exists in any in-repo or mkmf-template
+build config. `ratio_max` is still called from `!$omp target`/`loop` regions in
+`MOM_continuity_PPM.F90`. Correctness at HEAD therefore rests on nvfortran implicitly
+compiling/inlining a small same-file `pure` function for the device — empirically fine on the tested
+toolchain (the commit is merged and checksum-gated), but fragile. **Recommendation:** add
+`!DIR$ ATTRIBUTES FORCEINLINE :: ratio_max` for parity; never imitate the gap in new code.
+
+**The Wright anomaly `this` branch is mainline-safe but a live hazard on the pf branch.** On
+`dev/gpu`, the generic 2D/3D-plus-`rho_ref` dispatch is reached only from host paths. On
+`port/pressureforce-benchmark_ALE`, the k-blocked `int_density_dz_generic_plm`
+(`MOM_density_integrals.F90`) calls 3-D `calculate_density(..., rho_ref=rho_ref)` with
+`use_rho_ref = .true.` **by default**, dispatching into the `present(rho_ref)` branch that passes
+polymorphic `this` inside a `do concurrent` (`calculate_density_array_2d_buggy_Wright` and its 3-D
+sibling, `MOM_EOS_Wright.F90`). **Merge gate for that branch:** add
+`density_anomaly_elem_buggy_Wright_loc` first — trivial, and Roquet proves the pattern.
+
+**FMA contraction is pinned in the canonical NVHPC toolchain.** `mkmf/templates/ncrc5-nvhpc.mk` (and
+`ncrc-nvhpc.mk`) put `-Mnofma` (plus `-Mdaz`) in the **base** `FFLAGS`, for all build modes. Action:
+ensure the site GPU build harness (external to this repo) inherits `-Mnofma`. If it does, CPU↔GPU
+bit-identity does not depend on the two toolchains happening to contract identically.
+
+**FMS `omp_offload` is a genuine device path with NO fallback.** In the sibling FMS checkout,
+`mpp_group_update.fh` device-packs halos (`target teams distribute … if(use_device_ptr)` into a
+device buffer) and `mpp_transmit_mpi.fh` posts `MPI_ISEND`/`IRECV` inside
+`!$omp target data use_device_ptr(...)` — real CUDA-aware MPI on device pointers. There is **no**
+capability check: a non-GPUDirect MPI stack means crash or corruption, not graceful host staging. The
+nonblocking variants hardcode `use_device_ptr = .false. ! placeholder`, confirming doc 11's
+gated/unconditional analysis from the FMS side.
+
+**Restart staleness is latent, not live.** `save_MOM_restart` (`MOM.F90`) does no transfer of its
+own, but `step_MOM`'s sync-point blanket `update from(u, v, h, CS%uhtr, CS%vhtr)` runs whenever
+`MOM_state_is_synchronized(CS)` — the same condition under which the driver writes restarts — and
+thermo/mixing fields are host-authoritative (diabatic is host-only). Standing rule: any *newly
+device-resident* restart-registered field must be added to a dominating `update from` before
+`save_restart`.
+
+**"We lose present()" (`f74525ae8`) means the Fortran intrinsic, not the OpenACC data clause.** The
+diff contains no OpenACC `present()` data clauses anywhere, but it does contain commented-out OpenMP
+maps of the form `!!!$omp target enter data if(present(pbce)) map(to: pbce)` — the author tried
+intrinsic-`present()` conditional maps and disabled them. The foreshadowing link to the `2108e0eba`
+A100 crash (the same construct) stands.
 
 ---
 
-## 8a. Fable review — per-item resolutions (2026-07-14, source+git only; no builds/runs)
+## 9. Open questions
 
-**RESOLVED** (finding stated; the item above is settled):
+None of these are answerable from source or git. Each needs a run, a profile, or a maintainer's
+decision — go straight to the stated experiment rather than re-deriving from source.
 
-1. **GV device map is load-bearing.** `GV%Rlay` is read *inside* a device `do concurrent`
-   (`MOM_tracer_hor_diff.F90:902-915`, the `Rml_max`-vs-`GV%Rlay` binary density search) — the
-   `map(to: GV, GV%Rlay, GV%g_prime)` at `MOM.F90:3650` is consumed, not vestigial.
-2. **"Partial presence" is the literal NVIDIA runtime diagnostic.** The NVHPC OpenMP/OpenACC
-   runtime raises a FATAL "partially present" error when a mapping's address range partially
-   overlaps an existing present-table entry — exactly the whole-struct-over-attached-member
-   overlap the doc inferred. The inference is the actual mechanism; rely on it.
-3. **`c82e1254a` root cause: framing (ii).** The host re-allocated `CS%visc`, so the second
-   `map(to:)` targeted *different storage* than the first mapping — orphaning member attachments.
-   Under a strict OpenMP reading, re-mapping the *same* storage is only a refcount bump with no
-   copy (which is itself a trap: a later `map(to:)` on an already-present struct **does not
-   refresh device contents** — see §8b finding B). The "map the parent exactly once" rule guards
-   against both readings.
-4. **`CS%ADp` is safe today, but the mapping economy is incoherent** — see §8b finding B. The
-   `associated(ADp%sal_u/sal_v)` reads at `MOM_PressureForce_FV.F90:913/2044` are in plain host
-   loops (not device regions), so the `a774eb331` bug shape does not apply there. The only
-   *device*-evaluated `associated()` on ADp members (`MOM_vert_friction.F90:699,928`) is on
-   members explicitly attach-mapped at `:672-673`. Do NOT `map(to:)` the shell at `MOM.F90:3190`
-   as proposed — fix per finding B instead.
-5. **`delete` vs `release` is load-bearing — in the dangerous direction.** `exit data
-   map(delete:)` forces the refcount to zero, so a per-call `delete` inside a callee destroys any
-   *outer, persistent* mapping of the same object. This is not hypothetical: vert_friction's
-   `map(delete: ADp)` (`:1105`) kills MOM.F90:3190's init-time `map(alloc: CS%ADp)` on the first
-   call (finding B). Rule: `release` for scoped/per-call teardown; `delete` only in the owning
-   `*_end` teardown that mirrors the owning `enter data`.
-7. **Array-element `reduce` is an F2023 language rule, not an nvfortran quirk.** A
-   locality-spec/reduce list takes *variable names*; `max_srt(j)` is an array element, not a
-   variable, so rejecting it is conforming. Whole-array `reduce(+: block_sum)` is conforming
-   Fortran and positively supported. Reframe the doc's caution accordingly (the staged-scalar
-   workaround stays correct).
-8. **The "inline or wrong answers" claim has a primary source: `3cb184edd`'s own commit body** —
-   "for OpenMP, inlining of ratio_max and flux_elem is MANDATORY. do so with
-   `-Minline=name:ratio_max,name:flux_elem`. Otherwise results are incorrect." (Doc 05's verifier
-   searched the wrong commit.) The claim is era-specific evidence (the OpenACC→OpenMP
-   translation, pre-`num_teams`-fix kernel), not a timeless law — but treat it as binding for new
-   code.
-9. **Wright anomaly `this` branch: mainline-safe, live hazard on the pf branch.** On `dev/gpu`
-   the generic 2D/3D+`rho_ref` dispatch is only reached from host paths. But on
-   `port/pressureforce-benchmark_ALE`, the k-blocked `int_density_dz_generic_plm` calls 3-D
-   `calculate_density(..., rho_ref=rho_ref)` with `use_rho_ref = .true.` **by default**
-   (branch `MOM_density_integrals.F90:221,682`) → dispatches into the `present(rho_ref)` branch
-   passing polymorphic `this` inside `do concurrent`
-   (`MOM_EOS_Wright.F90:1011-1014,1052-1055`). **Merge gate for that branch:** add
-   `density_anomaly_elem_buggy_Wright_loc` (trivial, Roquet proves the pattern) first.
-10. **FMA contraction IS pinned in the canonical NVHPC toolchain.** `mkmf/templates/ncrc5-nvhpc.mk:93`
-    (and `ncrc-nvhpc.mk`) put `-Mnofma` (plus `-Mdaz`) in the **base** `FFLAGS`, all build modes.
-    Action: ensure the site GPU build harness (external to this repo) inherits `-Mnofma`; if it
-    does, CPU↔GPU bit-identity does not depend on matching contraction choices.
-11. **`ratio_max`'s missing directive is a deliberate removal, resting on implicit device
-    codegen.** `93dbbd36e` removed `!NVF$ INLINE` from `ratio_max` *without* replacement (while
-    giving `flux_elem`/`flux_elem_OBC` `FORCEINLINE`); no `-Minline` exists in any in-repo or
-    mkmf-template build config. `ratio_max` is still called from `!$omp target`+`loop` regions
-    (`MOM_continuity_PPM.F90:768-769` etc.). Correctness at HEAD therefore rests on nvfortran
-    implicitly compiling/inlining a small same-file `pure` function for the device — empirically
-    fine on the tested toolchain (the commit is merged and checksum-gated), but fragile.
-    **Recommendation:** add `!DIR$ ATTRIBUTES FORCEINLINE :: ratio_max` for parity; never imitate
-    the gap in new code.
-15. **FMS `omp_offload` is a genuine device path with NO fallback.** In the sibling FMS checkout:
-    `mpp_group_update.fh:422-531` device-packs halos (`target teams distribute … if(use_device_ptr)`
-    into a device buffer) and `mpp_transmit_mpi.fh:90-96,145+` posts `MPI_ISEND`/`IRECV` inside
-    `!$omp target data use_device_ptr(...)` — real CUDA-aware MPI on device pointers. There is no
-    capability check: a non-GPUDirect MPI stack means crash/corruption, not graceful host staging.
-    The nonblocking variants hardcode `use_device_ptr = .false. ! placeholder`
-    (`mpp_group_update.fh:662,769`) — confirming doc 11's gated/unconditional analysis from the
-    FMS side.
-17. **Restart staleness is latent, not live.** `save_MOM_restart` (`MOM.F90:4687`) does no
-    transfer of its own, but the sync-point blanket `update from(u, v, h, CS%uhtr, CS%vhtr)` at
-    `:1091` runs whenever `MOM_state_is_synchronized(CS)` — the same condition under which the
-    driver writes restarts — and thermo/mixing fields are host-authoritative (diabatic is
-    host-only, `:1827` brackets it). Standing rule confirmed: any *newly device-resident*
-    restart-registered field must be added to a dominating `update from` before `save_restart`.
-18. **"We lose present()" = the Fortran intrinsic, contra the doc-13 verifier's suspicion.**
-    `f74525ae8`'s diff contains **no** OpenACC `present()` data clauses anywhere, but it does
-    contain commented-out OpenMP maps of the form `!!!$omp target enter data if(present(pbce))
-    map(to: pbce)` — the author tried intrinsic-`present()` conditional maps and disabled them.
-    The foreshadowing link to the `2108e0eba` A100 crash (same construct) **stands**; restore the
-    stronger narrative in doc 13 row 17.
-20. **Done — `00-architecture.md` patched in place** (stale `!NVF$ INLINE` story, exit-data count,
-    call-site count, configure.ac line) with a pointer to the verified docs; see the file's
-    correction note.
+**Needs a run or a profile:**
 
-**ADVANCED but needing a run/profile to close** (do not re-derive from source; go straight to the
-stated experiment):
+- **`do concurrent` unspecified-locality semantics.** F2018 leaves locality *unspecified* by default;
+  nvfortran documents privatizing scalars whose first access in the construct is a write. The docs'
+  caution stands; the decisive check is `-Minfo=accel` output on one kernel, not more source reading.
+- **`do concurrent` single-stream serialization.** NVHPC's documented model launches DC kernels on
+  the default CUDA stream per host thread, so serialization of independent kernels is *expected* —
+  which is exactly what `acc-btstep`'s `async(1..3)` queues attack. Confidence is high (documented
+  behaviour), but quantify with one `nsys` timeline of btstep before investing (Tier-3 item 13).
+- **`NK_GPU_MAX=500` sizing.** At `GV%ke≈75`, 500-deep per-thread private column arrays over-allocate
+  device local memory ~6.7×; several such arrays per thread will spill and crush occupancy. Prefer
+  sizing from the dummy argument (`size(h,3)`) or a blocked redesign. The underlying constraint
+  (nvfortran rejecting non-dummy-sized automatics in device `pure` procedures, `05c74b56b`) is real,
+  so a `parameter` sized to a realistic maximum (e.g. 128) plus an init-time `FATAL` guard is the
+  pragmatic middle. Needs an occupancy measurement to settle. (Gates Tier-2 item 6.)
 
-6. **DC unspecified-locality semantics:** F2018 makes locality *unspecified* by default; nvfortran
-   documents privatizing scalars whose first access in the construct is a write. The doc's caution
-   stands; the decisive check is `-Minfo=accel` output on one kernel, not more source reading.
-12. **DC single-stream serialization:** NVHPC's documented model launches `do concurrent` kernels
-    on the default CUDA stream per host thread — serialization of independent kernels is
-    *expected*, which is exactly what `acc-btstep`'s `async(1..3)` queues attack. Confidence:
-    high (documented behavior), but quantify with one `nsys` timeline of btstep before investing
-    (Tier-3 item 13).
-19. **`NK_GPU_MAX=500` sizing:** at `GV%ke≈75`, 500-deep per-thread private column arrays
-    over-allocate device local memory ~6.7×; multiple such arrays per thread will spill and crush
-    occupancy. Prefer sizing from the dummy argument (`size(h,3)`) or a blocked redesign;
-    the underlying constraint (nvfortran rejecting non-dummy-sized automatics in device `pure`
-    procs, `05c74b56b`) is real, so a `parameter` sized to a *realistic* max (e.g. 128) with an
-    init-time `FATAL` guard is the pragmatic middle. Needs an occupancy measurement to settle.
+**Needs a maintainer decision:**
 
-**OPEN — genuinely needs a maintainer decision or hardware run** (unchanged): 13, 14 (benchmark
-judgments), 16 (branch-merge gate audit), 21 (NONBLOCKING_UPDATES policy), 22 (EOS endgame; note
-item 9's finding makes the `_loc` boilerplate route costlier than doc 06 estimated — the anomaly
-kernels must be duplicated too).
-
-## 8b. Fable review — new findings (not in any FABLE-CHECK)
-
-**A. Six early-`exit`-under-`do concurrent` sites remain at HEAD — the `e23d6a7b1` bug shape was
-fixed at only one site.** NVHPC 25.11 produced wrong answers from an early `exit` in a loop nested
-inside a DC (never-do #6), yet the identical shape survives at:
-`MOM_tracer_hor_diff.F90:911,913` (binary-search `exit`s, *same subroutine* as the fixed
-insert-sort), `MOM_tracer_advect.F90:287,292` (`domore` search loops), and
-`MOM_vert_friction.F90:700,929` (`direct_stress` column loops, also containing device-side
-`associated(ADp%…)` reads). The knowledge base previously contradicted itself here (doc 04 §5.5
-branch 5 cites `MOM_set_viscosity.F90:697` as an acceptable serial-k early-exit inside DC).
-Resolution of the contradiction: the ban is *empirical per NVHPC version*, not structural — but
-until each site is checksum-validated under ≥25.11, treat all six as latent wrong-answer bugs and
-apply the `e23d6a7b1` if-guard rewrite opportunistically. (`direct_stress` and
-`tracer_epipycnal_ML_diff` are non-default code paths, which is likely why nothing has tripped.)
-
-**B. The `ADp` mapping lifecycle is internally inconsistent (resolves items 4/5).** Sequence at
-HEAD: `MOM.F90:3190` maps `CS%ADp` persistently (`enter data map(alloc:)`, refcount 1, device
-copy = garbage shell). First `vertvisc` call: `enter data map(to: ADp)`
-(`MOM_vert_friction.F90:670`) — already present ⇒ refcount 2 and **the `to` copy is skipped**
-(present semantics), so the device shell stays garbage; only the explicitly attach-mapped
-`du_dt_str`/`dv_dt_str` (`:672-673`) get valid device descriptors — which is the only reason the
-device-side `associated()` reads at `:699/:928` are safe. Then `exit data map(delete: ADp)`
-(`:1105`) **forces refcount to 0**, destroying the init-time mapping; every subsequent `vertvisc`
-call re-creates the shell fresh (now with a real `to` copy). Net: the `MOM.F90:3190` map is dead
-weight that (a) suppresses the first call's shell refresh and (b) is silently destroyed. Fix
-options (maintainer choice): drop the init-time map and let vertvisc own the per-call lifecycle
-with `release`, or make the init-time map authoritative (`map(to:)` + per-call `update to(ADp)`
-and no per-call delete). Either way, add the general rule: **never `map(delete:)` an object your
-scope does not own** (now reflected in §3 Step 5 and never-do #13).
-
-**C. Generalized rule from item 3 + finding B:** a `map(to:)` on an already-present object does
-not refresh device contents. If a struct's host scalars/descriptors changed since its first map,
-the *only* refresh is `target update to(...)`. Several existing patterns rely on this implicitly;
-new code must not "re-map to refresh".
+- **PLM density-integral team launch.** Does the PLM hot path need continuity's manual
+  `num_teams(ceiling(...))` workaround, or does the tile geometry here (a `5*TILE_SIZE_X` inner
+  dimension) keep nvfortran's default team launch adequate? Compare any surviving `target teams loop`
+  in `int_density_dz_generic_plm`/`PressureForce_FV_Bouss` on `port/pressureforce-benchmark_ALE`
+  against the under-launch symptom that motivated `5b5f6b2b1`.
+- **Which PLM branch is merge-ready.** Is `port/pressureforce-benchmark_ALE` genuinely more
+  merge-ready than the naive port, or merely *different*? Its only edges are the `0x1` CPU default
+  and the `desubmodule`. Whether `0x1` beats `32x4` on CPU, and whether desubmoduling is the intended
+  end-state, needs a benchmark and a maintainer call.
+- **`diag_map_mediator_port` caller-residency audit** — the gate before merging that branch. The
+  rewritten `diag_remap_calc_hmask`/`downsample_*` routines assume their array arguments are already
+  device-resident and do no transfer themselves. Confirm every caller establishes that residency: a
+  caller handing in a host-only array would read uninitialized device memory silently. Check that the
+  `h` argument threaded into `diag_remap_calc_hmask` is mapped at every call site, not just the mask.
+- **`NONBLOCKING_UPDATES` policy for GPU production runs.** 14 of 26 GPU-aware halo sites silently
+  revert to host-staged communication when it is enabled (doc 11 §4). If GPU configs are expected to
+  run with it off, document that (and consider asserting at init when `__NVCOMPILER_OPENMP_GPU`
+  builds detect it on); if on, the 14 gated sites are a standing performance trap. Needs a param-doc
+  note.
+- **The EOS endgame.** Continue the per-form `_loc` boilerplate for the remaining 7 forms (including
+  the default `Wright_full`), or adopt the polymorphism-free `select case (form_of_EOS)` dispatch
+  sketched — as a proposal only — in doc 06 §6.4? The residual `this`-descriptor copy is structural
+  under the current design; the `select case` route removes it once for all forms. Note that the
+  Wright-anomaly finding above makes the `_loc` route costlier than doc 06 estimated, since the
+  anomaly kernels must be duplicated too. Upstream PR #156 / the `eos-3d` branches may already answer
+  this — check before investing in 7 more `_loc` conversions. (Shapes Tier-2 item 10.)
 
 ---
 
-## 9. Index of `docs/gpu-knowledge/`
+## 10. Index of `docs/gpu-knowledge/`
 
 | Doc | One line |
 |---|---|
-| `00-architecture.md` | Anchor: layout, CS pattern, step_MOM/RK2 call tree, memory model, merged-work inventory (⚠ see §8 item 20 for its known-stale spots) |
+| `00-architecture.md` | Anchor: layout, CS pattern, step_MOM/RK2 call tree, memory model, merged-work inventory (patched 2026-07-14 to drop its stale `!NVF$ INLINE` story and counts) |
 | `01-memory-control-structures.md` | Memory macros, symmetric-memory mechanics, full CS type/allocation graph, the 3 shaping commits (`81680c15d`/`c82e1254a`/`1865612de`) |
 | `02-pointer-usage.md` | Pointer taxonomy, `associated()` map guards, the `Reg%Tr(:)` and `visc` mapping bugs, pointer-hazard table |
 | `03-openmp-mapping.md` | Proven mapping patterns: lifecycle, shells, conditional maps, map-kind table, declare-target catalogue, update-from taxonomy |

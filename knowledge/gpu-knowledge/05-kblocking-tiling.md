@@ -435,11 +435,11 @@ an intermediate value — it never changes what is computed from what.** For a f
    dedicated commit `4e3f1b758` "add !NVF$ INLINE to ratio_max flux_elem." So the load-bearing point
    stands — the blessed pattern silently depends on force-inlining these helpers — but it should be
    cited to the §7.5 workaround and `4e3f1b758`, not to `93dbbd36e`'s performance step.
-   > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** Is there a primary source (commit message, code comment, or issue) that
-   > *directly* states missing inline of `flux_elem`/`ratio_max` produced **wrong numerical answers**
-   > (as opposed to a slowdown)? `00-architecture.md` §7.5 asserts "mandatory or wrong answers," but I
-   > could not locate the originating evidence in `git log`/source — check the PR discussion for #165
-   > and the history of `4e3f1b758`/the `-Minline` flag in the build config.
+   > **Resolved (2026-07-14):** The primary source exists — it is `3cb184edd`'s own commit body: "for
+   > OpenMP, inlining of ratio_max and flux_elem is MANDATORY … Otherwise results are incorrect." (This
+   > doc's earlier pass searched `93dbbd36e` and found nothing, which is why the evidence looked
+   > missing.) It is era-specific evidence — the OpenACC→OpenMP translation, on the pre-`num_teams`-fix
+   > kernel — not a timeless language law, but treat it as binding for new code.
 
 ---
 
@@ -830,8 +830,8 @@ Opus verification pass against source + git (no build/run). Baseline `dev-gfdl`,
    fusion is safe *here*, but the doc now spells out what would make it unsafe.
 2. **§3(4) misquoted `93dbbd36e`.** The phrase "Otherwise results are incorrect" is **not** in the
    commit message (which says only "Significantly improves performance ... at -O2"). Reattributed the
-   correctness-critical inlining claim to `00-architecture.md` §7.5 and branch commit `4e3f1b758`,
-   and flagged the missing primary source with a FABLE-CHECK.
+   correctness-critical inlining claim to `00-architecture.md` §7.5 and branch commit `4e3f1b758`.
+   Its primary source has since been located in `3cb184edd`'s commit body (see §3(4)).
 3. **§1.2 helper attributes.** `ratio_max` is a `pure function` (`:3086`) with **no** FORCEINLINE
    directive; only `flux_elem`/`flux_elem_OBC` are `elemental subroutine`s carrying
    `!DIR$ ATTRIBUTES FORCEINLINE` (`:1086`, `:1149`). Corrected the "both elemental + FORCEINLINE"
@@ -849,16 +849,11 @@ Opus verification pass against source + git (no build/run). Baseline `dev-gfdl`,
   verification procedure.
 - Added a branch-staleness caveat (kblock-hor-visc tip `9b69fc581` is ~15 commits past `28eb296f4`).
 
-### FABLE-CHECK markers: 1
-
-- §3(4): whether any primary source *directly* documents wrong numerical answers (vs. a slowdown) from
-  missing inline of `flux_elem`/`ratio_max`.
-
 ### Confidence
 
 **High** on all continuity and CoriolisAdv claims (verified verbatim against current tree and
 pre-commit source). **High** on the `28eb296f4` correction (full diff inspected; loop fusion and
 dimension-normalization are unambiguous in the hunk). **High** on bitwise-preservation for all three
-cases, including the fused loop. The single residual uncertainty is the provenance of the
-"inline-or-wrong-answers" claim (FABLE-CHECK), which affects wording, not the structural conclusion
-that force-inlining is required.
+cases, including the fused loop. The provenance of the "inline-or-wrong-answers" claim is now settled
+(`3cb184edd`'s commit body, §3(4)), confirming the structural conclusion that force-inlining is
+required.

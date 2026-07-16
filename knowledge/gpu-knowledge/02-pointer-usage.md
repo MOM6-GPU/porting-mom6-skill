@@ -302,17 +302,13 @@ has been the site of **three separate device-mapping bugs**, all variations on "
    parent's scalar contents with `target update to(...)`, never a second `enter data`.** Fix, in
    three parts:
 
-   > **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The precise OpenMP/nvfortran semantics behind this "second `map(to:)` clobbers
-   > member attachments" claim deserve the strongest-model check. Under a strict OpenMP 5.x reading, a
-   > `map(to:)` on a variable already *present* on device should only bump the reference count and copy
-   > nothing (present → no re-alloc, no member re-attach). The observed bug implies nvfortran instead
-   > re-runs the derived-type mapper (or re-copies the descriptor block) on the second `enter data`,
-   > detaching the separately-attached `Kv_shear`/`Kv_shear_Bu`. Is the correct root-cause framing "(i)
-   > nvfortran does not honor present-check semantics for derived types with allocatable/pointer
-   > components and re-copies the descriptor", or "(ii) the two directives mapped *different*
-   > storage (`map(alloc:)` of the whole struct vs `map(to:)` including members) so refcounts/attach
-   > state genuinely diverged"? The distilled porting rule (map parent once, never re-`enter data`)
-   > holds either way, but the *why* should be stated correctly for the compiler-workarounds doc.
+   > **Resolved (2026-07-14):** The root cause is re-allocated storage, not a refcount subtlety in
+   > nvfortran's present check. The host re-allocated `CS%visc`, so the second `map(to:)` targeted
+   > *different* storage than the first, orphaning the member attachments made in between. Two rules
+   > follow. First, "map the parent exactly once" guards against this regardless of which reading of
+   > the OpenMP spec you take. Second, a `map(to:)` on an already-present object does **not** refresh
+   > device contents — if a struct's host scalars or descriptors changed since its first map, the only
+   > refresh is `target update to(...)`. Never "re-map to refresh".
    - `CS%set_visc_CSp` changed from embedded-by-value (`type(set_visc_CS) :: set_visc_CSp`) to
      `type(set_visc_CS), allocatable :: set_visc_CSp` in `MOM.F90:417` (consistency with other
      pointer/allocatable child CSs, and to make the allocate/deallocate lifecycle explicit and
@@ -370,21 +366,24 @@ other map(to)-and-release) is exactly what went wrong in point 2 above.
 | `ocean_internal_state` | `MOM_variables.F90:138` | All-pointer alias struct over the entire prognostic+accel state; populated once (`MOM.F90:3195-3212`) and handed to diagnostics/ensemble code — a large "view" object that must never itself be separately device-mapped (its members already are, via their true owners) | Not GPU-mapped itself (used for host-side diagnostics/ensembles); low risk if it stays that way |
 | `vertvisc_type` (`MLD`, `Kd_shear`, `Kv_shear`, `Kv_shear_Bu`, `Kv_slow`, `TKE_turb`, `h_ML`, `sfc_buoy_flx`) | `MOM_variables.F90:258` | Feature-gated pointer + restart target + persistently mapped on device; three bugs already fixed here (§5) | Actively fixed/hardened; still fragile to any future re-map or re-allocation of `CS%visc` after its members are attached |
 | `thermo_var_ptrs` (`tv%T`, `tv%S`, `tv%p_surf`) | `MOM_variables.F90:79` | Cross-module alias of the dycore's own `CS%T/CS%S`; re-established at two points (`MOM.F90:3119`, `:3432-3433`) — any code path that reallocates `CS%T`/`CS%S` without re-running the `tv%T => CS%T` assignment silently detaches `tv` from current data | No known bug yet, but structurally analogous to the `visc`/`Kv_shear` re-map bug (§5.2) — worth auditing anywhere `CS%T`/`CS%S` are reallocated (the alias must be re-run *and* the device image refreshed) |
-| `accel_diag_ptrs` / `cont_diag_ptrs` (`ADp`, `CDp`) | `MOM_variables.F90:167,241` | All-pointer diagnostic aliases written by many producer modules (`vertvisc`, `CorAdCalc`, `PressureForce_FV`, `continuity`); each producer's `associated()` check on its own diagnostic slot must see a faithfully-mapped pointer | **`CS%ADp` *is* mapped `map(alloc: CS%ADp)` at `MOM.F90:3190`** (not `map(to:)`), and `associated(ADp%sal_u/tides_u/…)` is read as control flow in `MOM_PressureForce_FV.F90:913-931,2044-2058` — this is exactly the §4b shape. See FABLE-CHECK below. |
+| `accel_diag_ptrs` / `cont_diag_ptrs` (`ADp`, `CDp`) | `MOM_variables.F90:167,241` | All-pointer diagnostic aliases written by many producer modules (`vertvisc`, `CorAdCalc`, `PressureForce_FV`, `continuity`); each producer's `associated()` check on its own diagnostic slot must see a faithfully-mapped pointer | **`CS%ADp` *is* mapped `map(alloc: CS%ADp)` at `MOM.F90:3190`** (not `map(to:)`), and `associated(ADp%sal_u/tides_u/…)` is read as control flow in `MOM_PressureForce_FV.F90:913-931,2044-2058` — this is exactly the §4b shape. Safe today (host-side reads) but the lifecycle is incoherent — see the note below. |
 | `MOM_restart_CS%var_ptrNd(:)` (`p0d..p4d`) | `MOM_restart.F90:130-134` | Heterogeneous pointer-array registry over arbitrary host arrays; host-only by design (I/O), but any future "GPU-resident restart" work would hit the same AoS-of-pointers attach cost documented in `1865612de` | Host-only today (`00-architecture.md` §7.4); a future hazard, not a current one |
 | Any *future* `type(p2d)/type(p2di) dimension(SZJ_(G))` (array-of-pointer-to-2D-array, one alloc per row) | pattern retired in `MOM_tracer_hor_diff.F90` by `1865612de`, defined at `:104-110` (now dead code — no remaining users in that file, verified) | Per-row `enter data` inside a loop is the concrete anti-pattern that cost 2x compile/attach time; the type definitions remain in-file as a fossil/warning | Fixed here; **do not reintroduce this pattern elsewhere** (e.g. `MOM_set_diffusivity.F90`, `MOM_CVMix_KPP.F90`, `MOM_energetic_PBL.F90` are still unported and may contain the same idiom — check before porting) |
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** `CS%ADp` is mapped with `!$omp target enter data map(alloc: CS%ADp)` at
-> `MOM.F90:3190` (an all-pointer `accel_diag_ptrs`), while `associated(ADp%sal_u)`, `associated(ADp%tides_u)`,
-> etc. are read for control flow in `MOM_PressureForce_FV.F90:913-931` and `:2044-2058`. This is the
-> exact `map(alloc:)`-on-a-pointer-struct shape that §4b/`a774eb331` identified as a multi-GPU bug for
-> `Reg%Tr(:)`. Is `CS%ADp` a latent version of the same bug, or is it safe here? Two possible reasons
-> it may be safe — please adjudicate: (a) those `associated(ADp%...)` reads sit in *plain* `do k/do j`
-> host loops (not `do concurrent`/`target`), so the check may execute host-side where the host
-> descriptor is authoritative; (b) `map(alloc:)` on the *parent* `ADp` may be harmless as long as the
-> pointer *members* actually read on device (`du_dt_visc`, etc.) are separately `map(to:)`-attached and
-> the parent's own pointer descriptors are never dereferenced on device. Confirm which (if either)
-> holds, and whether `map(alloc: CS%ADp)` should be `map(to:)` for safety/consistency.
+> **Resolved (2026-07-14):** Not a latent `Reg%Tr(:)`-style bug — the `associated(ADp%…)` reads in
+> `PressureForce_FV` sit in plain host loops, where the host descriptor is authoritative. But the
+> `ADp` mapping lifecycle is internally inconsistent. `initialize_MOM` maps `CS%ADp` with
+> `map(alloc:)` (refcount 1, a garbage shell); the first `vertvisc` (`MOM_vert_friction.F90`) does
+> `enter data map(to: ADp)` on an already-present object, so the refcount goes to 2 and **the `to`
+> copy is skipped** — the shell stays garbage, and only the explicitly attach-mapped
+> `du_dt_str`/`dv_dt_str` get valid device descriptors, which is the sole reason `vertvisc`'s
+> device-side `associated(ADp%…)` reads are safe. The matching `exit data map(delete: ADp)` then
+> forces the refcount to 0, destroying `initialize_MOM`'s mapping; every later `vertvisc` call
+> re-creates the shell fresh, now with a real `to` copy. Net: the init-time map is dead weight.
+> Fix (maintainer's choice): either drop the init-time map and let `vertvisc` own the per-call
+> lifecycle with `release`, or make the init-time map authoritative (`map(to:)` + per-call
+> `update to(ADp)`, no per-call delete). Do **not** `map(to:)` the shell in `initialize_MOM` — that
+> was proposed and is wrong.
 
 ---
 
@@ -467,10 +466,6 @@ source and `git show`/`git diff` on branch `dev/gpu`.
 `MOM.F90:1807-1812`); the reassigned-alias hazard class (§1.4); tightened §7 rules (now 7 rules); and
 a flagged latent-hazard finding that `CS%ADp` is itself mapped `map(alloc:)` at `MOM.F90:3190`.
 
-**Open items (FABLE-CHECK):** 2 markers — (1) the nvfortran present-check/derived-type re-map
-semantics behind the §5.2 clobber; (2) whether `map(alloc: CS%ADp)` at `MOM.F90:3190` is a latent
-`a774eb331`-style bug or safe.
-
 **Confidence:** High on all commit reconstructions and line numbers (directly verified against
-source/git). Medium on the two FABLE-CHECK items, which turn on nvfortran-specific runtime behavior
-that cannot be settled from source alone.
+source/git). The §5.2 clobber mechanism and the `CS%ADp` mapping question are both settled — see the
+resolved notes in those sections.

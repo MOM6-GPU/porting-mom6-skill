@@ -240,14 +240,12 @@ MOM_diag_remap.F90`:
    an **implicit** map(to:)/map(from:) pair that the downsample kernels would otherwise trigger on
    their own, one field at a time.
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The rewritten `diag_remap_calc_hmask`/`downsample_*` routines now *assume* their
-> array arguments are already device-resident (comments "must already be present on the device",
-> "expects field_in on device") and do no transfer themselves. Confirm every caller on
-> `origin/diag_map_mediator_port` actually establishes that residency (a dominating `target enter data
-> map(alloc/to:)` on the exact array passed) — a caller that hands in a host-only array would read
-> uninitialized device memory silently. The `set_masks_for_axes` path aliases `axes%mask3d` to `mTL`
-> and maps `mTL`; check the `h` argument threaded into `diag_remap_calc_hmask` is likewise mapped at
-> every call site, not just the mask.
+> **Open (reviewed 2026-07-14):** does every caller on `diag_map_mediator_port` establish the device
+> residency that the rewritten `diag_remap_calc_hmask`/`downsample_*` routines assume? The review could
+> not settle this from source — it needs the specific caller-residency audit, and that audit is the
+> gate before merging that branch: a caller handing in a host-only array would read uninitialized
+> device memory silently. In particular, check the `h` argument threaded into `diag_remap_calc_hmask`
+> is mapped at every call site, not just the mask. See KNOWLEDGE.md §9.
 
 ### 3.1 Answer to Q3 — offload the mediator, or just cut transfers?
 
@@ -416,14 +414,12 @@ serial, host-side bookkeeping concern (consistent with `.testing/tools/track_gpu
 `!@start noport` sentinel category described in `00-architecture.md` §8, though `MOM_restart.F90`
 itself carries no such sentinels — it simply has nothing device-related to mark).
 
-> **FABLE-CHECK (reviewed 2026-07-14 — resolution or current status in KNOWLEDGE.md §8a/§8b):** The "would silently write stale host memory" risk is an *inference*, not an
-> observed bug. Confirm it: locate the actual `save_restart`/`restart_registry` write call sites in
-> `MOM.F90`/`config_src/drivers/solo_driver/MOM_driver.F90` and check whether each is dominated by a
-> preceding `target update from(...)` covering every registered device-resident field (not just
-> `u,v,h,uhtr,vhtr`). If a restart-registered array that is *only* written on device (e.g. a
-> pointer-member `Kd_shear`/`MLD` restart target from `MOM_variables.F90` §2.1) has no transfer before
-> the write, the risk is real *today*; if all restart writes currently happen at synchronization
-> points already covered by the §2.2 blanket transfers, it is only a latent trap for *future* ports.
+> **Resolved (2026-07-14):** the stale-host risk is **latent, not live**. `save_MOM_restart` does no
+> transfer of its own, but `step_MOM`'s sync-point blanket `update from(u, v, h, CS%uhtr, CS%vhtr)`
+> runs whenever `MOM_state_is_synchronized(CS)` — the same condition under which the driver writes
+> restarts — and the thermo/mixing fields are host-authoritative because diabatic is host-only. The
+> standing rule: any *newly* device-resident restart-registered field must be added to a dominating
+> `update from` before the restart save.
 
 ---
 
@@ -572,6 +568,6 @@ Verified against source + git on branch `dev/gpu` (baseline `dev-gfdl`); no code
 **Confidence:** High. Every load-bearing factual claim (empty diffs, the 249 count and all per-file
 counts, the five guarded sites and their conditions, `ff86497d5`, the `write_energy` transfers, the
 `diag_map_mediator_port` scope and its four offload items, the nvtx wrapper code, all §1 line numbers)
-was verified directly against source or git and matches. The two open items are flagged as
-FABLE-CHECK: (a) whether the restart "stale host" risk is live *today* vs latent for future ports, and
-(b) whether the `diag_map_mediator_port` device-residency contract is honored by all callers.
+was verified directly against source or git and matches. Of the two items previously raised for
+review: (a) the restart "stale host" risk is settled — latent, not live (§6); (b) whether the
+`diag_map_mediator_port` device-residency contract is honored by all callers remains open (§3).
