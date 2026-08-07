@@ -95,51 +95,94 @@ in easy-to-miss ways:
   the loop body when the condition is simply gating whether the iteration
   runs at all.
 
-**The one case where `do concurrent` cannot be used**: a loop that needs to
-privatize an *automatic array* per thread (i.e. an array-valued temporary
-sized from loop or subroutine bounds, as opposed to the scalar temporaries
-`local(...)` is meant for). As of the current `nvfortran` release (26.5),
-there's a known compiler bug in this scenario. If you hit this, don't fight
-it — fall through to the next construct. Since this is a live compiler bug,
-check whether it's been resolved in a newer `nvfortran` release before
-reflexively falling back, in case this exception has become stale.
+**Automatic arrays — read this carefully, the common summary of it is wrong.**
+The problem is *not* "`do concurrent` cannot privatize an automatic array."
+An automatic array declared in the **directive's own routine** and listed in
+`private(...)` works fine, and is merged and checksum-gated
+(`MOM_vert_friction.F90:575,737`). The construct that actually fails is an
+automatic array **local to a callee** invoked from a device region and sized
+from something that is *not* a dummy argument (e.g. `SZK_(GV)` →`GV%ke`, a
+derived-type component), because that would need a device-side dynamic stack.
+Swapping loop constructs does **not** help — the original failing case was
+`!$omp target loop`, not `do concurrent`. Fix it at the callee instead: size
+the automatic from a dummy argument, or better, have the caller pass the
+workspace in (see `knowledge/gpu-knowledge/nvfortran-automatic-array-bug.md`
+for the full table and the ranked workarounds). Note this bug only bites
+**dynamic-memory** builds; static memory makes `SZK_` a compile-time constant.
 
-### 2. `!$omp target teams loop collapse(n)` (fallback for automatic-array privatization)
+**The real reasons to leave `do concurrent`** are the two below.
 
-When `do concurrent` isn't usable because of the automatic-array
-privatization issue above, use `!$omp target teams loop` instead, with
-`collapse(n)` for the `n` loop levels that are actually parallel:
+### 2. `!$omp target teams distribute parallel do collapse(n)` (when the kernel body calls a procedure)
 
-```fortran
-!$omp target teams loop collapse(2)
-do j=js,je
-  do i=is,ie
-    ! loop body, including whatever needed the automatic array
-  enddo
-enddo
-```
-
-This is the preferred OpenMP fallback (over the option below) based on how it
-performs with `nvfortran` in practice.
-
-### 3. `!$omp target distribute parallel do collapse(n)` (fallback for when `target teams loop` fails)
-
-If `target teams loop` itself fails to compile or run correctly for a given
-loop (e.g. due to a compiler bug rather than the automatic-array issue),
-`!$omp target distribute parallel do collapse(n)` has worked as a substitute
-in some of these cases:
+`do concurrent`'s collapse is **inferred**, and nvfortran gives it up when the
+body makes a call it cannot see through (see "Calling a procedure from inside
+a kernel" below). An OpenMP `collapse(n)` is *asserted*, so it survives. This
+is the form used by the merged device-call kernels — `MOM_vert_friction.F90:1443`
+and the kappa-shear port's `kappa_shear_column` call site:
 
 ```fortran
-!$omp target distribute parallel do collapse(2)
-do j=js,je
-  do i=is,ie
-    ! loop body
-  enddo
-enddo
+!$omp target teams distribute parallel do collapse(2) private(f2, i, j)
+do j=js,je ; do i=is,ie
+  ! loop body, including a call to a !$omp declare target routine
+enddo ; enddo
 ```
 
-Reach for this only after `target teams loop` has actually been tried and
-shown to fail — it's a second-line fallback, not an alternative default.
+### 3. `!$omp target teams loop collapse(n)` (only when the body makes no calls)
+
+Equivalent performance to the above when it works (measured within ~5%), but
+on nvfortran 26.3 **`target teams loop` containing a call to a `declare target`
+routine is a hard internal compiler error**:
+
+```
+nvnvvmd: error: parse invalid cast opcode for cast from 'float' to 'i8*'
+NVFORTRAN-F-0155-Compiler failed to translate accelerator region
+```
+
+reproduced with and without `-stdpar`, and with both assumed-shape and
+explicit-shape dummies. So prefer form 2 whenever the body calls anything.
+
+## Calling a procedure from inside a kernel
+
+Correctness rules (`declare target` vs force-inline, polymorphic `this`, etc.)
+live in `knowledge/gpu-knowledge/08-cross-module-inlining.md`. Two additional
+traps cost performance or crash without any compile-time warning:
+
+**1. Never pass a non-contiguous array section.** Passing `Igu(i,j,:)` to an
+assumed-shape `dimension(:)` dummy makes nvfortran repack the section into a
+**per-thread temporary on the device heap**. The default heap (~8 MB) runs out
+once there are enough columns, and the failure is a bare
+`CUDA_ERROR_ILLEGAL_ADDRESS` with no message telling you to raise
+`NV_ACC_CUDA_HEAPSIZE` (that friendly message only appears for *user-declared*
+automatics, which the compiler null-checks; a compiler-generated repack is not).
+`compute-sanitizer --tool memcheck` shows the real cause as
+`Malloc/Free Warning encountered : Device-side malloc failed`. Pass the whole
+3-D array plus the `i,j` indices instead.
+
+**2. Declare those dummies explicit-shape, and give input scalars `VALUE`.**
+Both are required, or the loop silently loses its collapse:
+
+| dummies | input scalars | collapse? |
+|---|---|---|
+| assumed-shape `(isl:,jsl:,:)` | by reference | no |
+| assumed-shape | `VALUE` | no |
+| explicit-shape `(isl:iel,jsl:jel,nk)` | by reference | no |
+| **explicit-shape** | **`VALUE`** | **yes** |
+
+An assumed-shape dummy passes a descriptor by reference and a scalar without
+`VALUE` passes an address; either makes `-Minfo` say `Reference argument
+passing prevents parallelization: <name>` and drop to parallelizing the outer
+loop only. `intent(out)` scalars may stay by reference. Getting both right is
+worth **3-4x** and needs no build flags — prefer it over `-Minline`, which
+hides the requirement in the build system where a user who rebuilds without
+the flag silently gets the slow version. `kappa_shear_column` already uses
+explicit-shape dummies (`dimension(SZI_(G),SZJ_(G),SZK_(GV)+1)`).
+
+**Check it, don't assume it.** `-Minfo=all` should say `auto-collapsed` /
+`collapse(2)`. To see the actual launch geometry, run with
+`NVCOMPILER_ACC_NOTIFY=1`: a collapsed 360x180 loop reports `grid=507
+block=128` (one thread per column), an un-collapsed one `grid=180 block=128`
+(grid capped at `nj`). Also note `local(i,j)` naming the loop's own indices is
+rejected outright (`NVFORTRAN-S-1045`), on CPU and GPU alike.
 
 ## Data mapping: what's already resident, and what you must map yourself
 
@@ -170,6 +213,26 @@ until a run crashes. If only the arrays changed, map only the arrays back.
 For the four rules governing *where in the code* a mapping directive belongs
 (subroutine-local temporaries, static vs. dynamic `*_CS` fields, and
 subroutine argument arrays), see `references/data-mapping-conventions.md`.
+
+**Check transfer parity across every branch of an if/elseif chain.** When you
+port one branch of a chain to the device and leave its siblings on the host,
+the transfer that belongs to the ported branch is easy to miss, because the
+sibling branches already have one that *looks* like it covers the case. This
+shipped as a real bug: in `tracer_hordiff`, the `use_variable_mixing` branch
+computes `khdt_x`/`khdt_y`/`Kh_u`/`Kh_v` in `do concurrent` on the device,
+while the two branches below it compute the same arrays on the host and each
+end with `!$omp target update to(...)`. The device branch needed an `update
+from` and had none, so downstream **host** code read arrays that were never
+written (fixed in `979be73e6`). When you finish a branch, ask: which side
+computed these values, which side reads them next, and does *this* branch have
+its own directive — not just the one belonging to the branch below it.
+
+Note the direction of the two failure modes. A missing `update to` usually
+shows up as wrong answers. A missing `update from` may not: if the stale host
+values feed something that only influences control flow — an iteration count,
+a limiter, a diagnostic threshold — answers can stay bitwise identical while
+the run misbehaves in some other way entirely. See "When a run appears to
+hang" below.
 
 ## Preserving CPU and GPU performance together
 
@@ -214,6 +277,47 @@ Before considering a port done:
   for performance regressions more broadly. It may not be populated yet —
   check whether it exists and has usable scripts before assuming it's
   available, and ask the user if you can't find it.
+
+**Beware intermittent failures — measure the rate, don't reason about one
+run.** GPU kernels are deterministic, so a failure that appears in some runs
+and not others almost always means *uninitialized memory* is being read
+(`map(alloc:)` leaves the device copy unset; a never-written host array is
+whatever was on the heap). Two traps when quantifying this:
+
+- Separate CPU runs from GPU runs before computing any rate. Mixing them made
+  a 4-run clean streak look like 8 and wrongly implicated a code change.
+- Run rate tests **one at a time**. Two GPU jobs co-scheduled on a node slow
+  each other ~3x, which a stall-detector reads as a hang.
+
+Compare candidate against control by **alternating them in a single job** on
+one device, so both see the same machine state, and report the count (e.g.
+"11/24 vs 0/8, Fisher p = 0.019") rather than an impression.
+
+## When a run appears to hang
+
+An apparently hung GPU run is often not hung. Work outward:
+
+1. `nvidia-smi --query-compute-apps=pid,used_memory` — is the GPU still busy?
+2. `gdb -p <pid> -batch -ex "thread apply all bt"` on the **MOM6 rank**, not
+   `mpirun` (`pgrep -x MOM6`; matching on the executable path also matches
+   `mpirun`'s command line).
+3. `NVCOMPILER_ACC_NOTIFY=15` traces every kernel launch, data action, region
+   and wait. If the trace keeps growing, the process is executing, not stuck.
+   Counting the actions tells you *what* is looping. Two warnings: the trace
+   is enormous (13 GB in one case here — watch your quota), and the slowdown
+   is large enough that a stall-detector will call a healthy run hung, so
+   don't classify runs while it's on.
+
+The case that motivated this: `benchmark_ALE` on GPU appeared to hang ~44% of
+runs. The trace showed 5.9M kernel launches in `tracer_hordiff` before day 1
+against ~300 expected. It was executing normally — an uninitialized host
+`khdt_x` (the transfer-parity bug above) produced a garbage diffusive CFL, and
+`num_itts = max(1, ceiling(max_CFL - ...))` is **unbounded**, so one timestep
+became 89,159 iterations. Instrumenting the two suspect quantities with a
+`write(0,...)` per timestep found it immediately after three wrong hypotheses
+had been chased on inference alone. A stack sample landing in the OpenMP
+runtime's lock was a red herring: with millions of data regions being entered
+per second, that is simply where a sample is likely to land.
 
 ## Reference files
 
