@@ -1,6 +1,16 @@
+A work-in-progress Claude skill for porting MOM6 to NVIDIA GPUs with nvfortran.
 
-This repo contains a work-in-progress Claude skill to assist in porting MOM6 to GPUs. To uses this skill with Claude code, add a `.claude/skills/` folder to the MOM6 repo before prompting Claude to port a MOM6 module and copy the contents of this repo there without this README.md file. Alternatively, you can copy the contents of this repo to `~/.claude/skills` to make it available to Claude globally. I believe you can make this skill available to other models/harnesses in a similar way. 
+**Install.** Copy this directory, as a directory, to `.claude/skills/porting-mom6-skill/` in your
+MOM6 checkout, or to `~/.claude/skills/porting-mom6-skill/` to make it available everywhere.
+Claude Code finds `SKILL.md` one level below `skills/`. This README is not read by the skill.
 
-TODO: 
-* Add scripts to the `/scripts` to automatically get timings and check that answers haven't changed
+**Layout.**
+- `SKILL.md`: the workflow and the hard rules, loaded when the skill triggers.
+- `references/`: one file per topic, read on demand.
+- `scripts/`: intentionally empty. Add your own scripts for building, running the target
+  configurations, timing, and comparing answers on your system, and mention them in `SKILL.md`.
 
+**Evidence.** Claims are tagged `[run-verified]`, `[source-only]` or `[unverified]`, and are
+for nvfortran 26.3 unless marked. Compiler findings point to reproducers in the nvfortran-mres
+repository. When you confirm or overturn a claim, update its tag, and keep entries short: the
+rule, one line of why, and the evidence.
