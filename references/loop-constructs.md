@@ -16,7 +16,17 @@ Take the first that fits:
    **calls a procedure**, or needs array scratch (section 4). The collapse is asserted, not
    inferred, and the explicit thread mapping avoids the compiler-chosen mappings that break
    below. Precedent: the column kernels in `vertvisc_coef` (`MOM_vert_friction.F90`).
-3. **`!$omp target teams loop collapse(n)`** only when the body makes **no** calls.
+3. **`!$omp target teams loop collapse(n)`** only when the body makes **no** calls, unless it
+   carries `bind(teams,parallel)`. With the binding asserted, `target teams loop` can call
+   procedures and has given better performance than form 2. Write it through the compatibility
+   macro, since only nvfortran supports the clause:
+   ```fortran
+   #include "omp_loop_bind_compat.h"
+   !$omp target teams loop collapse(2) LOOP_BIND_TEAMS_PARALLEL
+   ```
+   `LOOP_BIND_TEAMS_PARALLEL` expands to `bind(teams,parallel)` where supported and to nothing
+   otherwise. Whether this or form 2 is the preferred form for loops with calls is still under
+   discussion; follow the surrounding module, or ask the user.
 
 Why calls push you to form 2 `[run-verified]`: when nvfortran picks the thread mapping itself
 (`do concurrent` under `-stdpar=gpu`, or `target teams loop`) and puts an inner loop on
@@ -144,11 +154,6 @@ When nothing depends across `k`, put `k` in the header instead
 On 26.3 the insertion sort from `tracer_epipycnal_ML_diff` and an early-exit thickness search
 both matched the host at `-O0` and `-O2` `[run-verified]` (nvfortran-mres repo,
 `dc_early_exit/`).
-
-An older rule banned `exit` in device loops because of commit `e23d6a7b1`, which says NVHPC
-25.11 gave wrong answers. That report is `[unverified]`: it was never reproduced, 25.11 was
-not available to test, and that loop also left its scratch scalars out of `local()`. Do not
-rewrite an `exit` into an if-guard on the strength of it.
 
 ## 8. Checking the schedule
 

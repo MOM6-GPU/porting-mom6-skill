@@ -12,6 +12,9 @@ Contents: 1 build flags · 2 answers · 3 keeping arithmetic order fixed · 4 ma
 Our GPU build: `-mp=gpu -stdpar=gpu -gpu=mem:separate -Mnofma -r8`, at `-O3` (or
 `-O0` for debugging). Other references give flags only where they differ.
 
+`-Mnovect` is required at `-O2` or higher for bitwise comparison: CPU vectorization in
+nvfortran changes the order of operations, so answers change.
+
 `-Mnofma` is required for bitwise comparison: without it, host and device contract `a*b + c`
 differently and answers differ in the last bit `[run-verified]`. Check that your build's flags
 include it. An existing build directory does not pick up changed flags, so delete the affected
@@ -34,13 +37,19 @@ include it. An existing build directory does not pick up changed flags, so delet
   verification; suggest one when answers differ only with the decomposition, or when the user
   asks.
 - The repository test suite (`.testing`) runs in CI. Run it locally only when the user asks.
+- **GPU test coverage is limited.** Many code paths (open boundary conditions, ice shelves, and
+  most optional parameterizations) are not exercised by any GPU test case, so a passing test
+  says nothing about them. When a port touches such code, say so, compare answers in a
+  configuration that turns it on if one is available, and review those changes with extra care.
 - A port can leave `ocean.stats` bitwise identical and still be wrong, if a stale host value only
   reaches control flow (`data-mapping.md` section 5).
 
 ## 3. Keeping arithmetic order fixed
 
-- Never reduce reals in parallel (`reduce(+:)`) or split a float sum across blocks
-  (`loop-constructs.md` section 5, `blocking.md` section 6). For a reproducible global sum, use
+- Never sum reals in parallel (`reduce(+:)`) or split a float sum across blocks
+  (`loop-constructs.md` section 5, `blocking.md` section 6). Other parallel reductions are
+  safe because their result does not depend on order: integer `+`, `min`/`max` on reals or
+  integers, and logical `.or.`/`.and.`. For a reproducible global sum, use
   `reproducing_sum` / `reproducing_sum_EFP` (`MOM_coms.F90`), keeping multi-part totals as
   `EFP_type` until the end.
 - Keep a sum in the same loop as the values it sums. Splitting the producer and the

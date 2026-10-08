@@ -34,7 +34,6 @@ Older reports that did not reproduce on 26.3. Do not avoid these patterns becaus
 
 | Old report | Source | 26.3 result |
 |---|---|---|
-| Early `exit` from a loop under `do concurrent` gives wrong answers (25.11) | `e23d6a7b1` | correct at `-O0`/`-O2` (`dc_early_exit/`) |
 | `map(to: x) if (present(x))` in a callee crashes (25.5, A100) | `2108e0eba` | works (`data_mapping/` v5) |
 | `modulo()` not available on the device | `9aea28954` | works (`device_calls/`) |
 | A callee without `declare target` or forced inlining gives silently wrong answers | `3cb184edd` (OpenACC-era) | same-file callee works; cross-file callee fails to link (`device_calls/`) |

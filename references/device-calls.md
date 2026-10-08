@@ -46,7 +46,9 @@ Confirm with `-Minfo=inline`: `<routine> inlined, size=...`.
   (nvfortran-mres Issue 3). This issue should be resolved in nvfortran 26.9 or later.
 - **Inlining can change answers.** An inlined loop that accumulates a value invariant in that loop
   can lose its reduction when the loop lands on GPU threads: wrong answers, no message
-  (Issue 5). After adding `-Minline`, compare answers again.
+  (Issue 5). Inlining can also change whether an expression is contracted into an FMA. This is
+  hidden while we build with `-Mnofma`; consider it only when an answer change is otherwise
+  unexplained.
 - `-Minline` is also the workaround for the code-generation bug in `loop-constructs.md`
   section 1 (Issue 4).
 - On nvfortran 26.9, a module-scope `use omp_lib` (even with `only:`) in the callee's module, or a
@@ -61,13 +63,13 @@ Confirm with `-Minfo=inline`: `<routine> inlined, size=...`.
   (~8 MB by default). With enough columns the heap runs out and the kernel fails with a bare
   `CUDA_ERROR_ILLEGAL_ADDRESS`; at smaller sizes it is ~400x slower `[run-verified]`.
   `compute-sanitizer --tool memcheck` shows `Device-side malloc failed`. Pass the whole 3-D
-  array plus `i, j`, and declare the dummies `(isl:iel, jsl:jel, nk)` (last item below).
+  array plus `i, j`, and declare the dummies `(is:ie, js:je, nk)` (last item below).
 - A contiguous section taken once on the host, outside any kernel, is fine: `tv%T(:,:,1)` passed
   to a 2-D interface that runs its own `do concurrent` showed no slowdown and identical answers.
   Write a real 2-D interface instead of adding a fake extent-1 dimension to reuse a 3-D one.
-- **Declare array dummies explicit-shape and give input scalars `VALUE`.** It is a speed-up,
-  not a correctness or collapse requirement: in a `do concurrent` reproducer every combination
-  kept its collapse, explicit-shape was worth ~30% and `VALUE` ~20%, and the two add up
+- **Declare array dummies explicit-shape** (`real, intent(in) :: a(is:ie, js:je, nk)`, not
+  `a(:,:,:)`). It is a speed-up, not a correctness or collapse requirement: in a
+  `do concurrent` reproducer explicit-shape was worth ~30% and kept the collapse
   `[run-verified]` (`device_calls/repro_collapse.F90`).
 
 ## 4. Local arrays in a callee

@@ -4,8 +4,8 @@ Blocking splits a domain loop into an outer loop over blocks and inner loops wit
 block size is a runtime parameter: the default reproduces the CPU-oriented loop structure and
 work-array sizes of the unported code, while a GPU build uses one block spanning the whole local
 domain, so each kernel gets the most parallel work. ("Block" is used to avoid confusion with MPI
-domains and FMS tiles.) Modules already blocked this way: `MOM_continuity_PPM`,
-`MOM_CoriolisAdv`, `MOM_hor_visc` and `MOM_diabatic_aux`. Copy their shape.
+domains and FMS tiles.) Before blocking a new routine, find modules that are already blocked
+(`grep -rln "NKBLOCK\|NJBLOCK\|NIBLOCK" src/`) and copy their shape.
 
 Contents: 1 when to block, and along which axis · 2 parameters · 3 the wrapper ·
 4 the block loop · 5 work arrays · 6 answers
@@ -56,6 +56,8 @@ if (CS%njblock < 0) &
   integer, parameter :: default_njblock = 1  ! one row at a time, as before the port
   #endif
   ```
+- Selecting the default with `__NVCOMPILER_OPENMP_GPU` is a temporary solution until a more
+  permanent pattern is established.
 
 ## 3. The wrapper
 
@@ -109,13 +111,13 @@ enddo ; enddo
 
 Naming:
 - block start/end `isb`/`ieb`, `jsb`/`jeb`, `ksb`/`keb`; staggered `IsbB`/`IebB`, `JsbB`/`JebB`;
-- block-local indices `ii`, `jj`, `kk` (`II`, `JJ` on faces) and their extents `iie`, `jje`,
-  `kke`;
+- block-local indices `ii`, `jj`, `kk` (`II`, `JJ` on faces, `KK` on interfaces) and their
+  extents `iie`, `jje`, `kke` (`IIe`, `JJe`, `KKe` on faces and interfaces);
 - global indices `i`, `j`, `k`, derived in the body and listed in `local()`.
 
-Either index can drive the loop. `MOM_diabatic_aux` loops over global `i, j` and derives
-`ii = i - isb + 1, jj = j - jsb + 1`. Choose the one that keeps the body simplest, and keep the
-`do concurrent (j) / do k / do concurrent (i)` structure of `loop-constructs.md` section 6
+Always drive the loop with the block-local indices (`ii`, `jj`, `kk`) and derive the global
+ones in the body, as above. Keep the
+`do concurrent (jj) / do k / do concurrent (ii)` structure of `loop-constructs.md` section 6
 inside a block where it applies.
 
 - Pass the block's bounds to helpers (`ksb, keb`, or the block extent) instead of `1:nz`, so a

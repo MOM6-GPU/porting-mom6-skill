@@ -101,7 +101,9 @@ Full rules, with evidence: `references/loop-constructs.md`. In short:
    clause wrapped in `DO_LOCALITY(...)` (`#include "do_concurrent_compat.h"`).
 2. **`!$omp target teams distribute parallel do collapse(n) private(...)`** when the body
    calls a procedure or needs per-iteration array scratch.
-3. **`!$omp target teams loop collapse(n)`** only when the body makes no calls.
+3. **`!$omp target teams loop collapse(n)`** only when the body makes no calls, unless it
+   carries `LOOP_BIND_TEAMS_PARALLEL` (`bind(teams,parallel)`, from
+   `#include "omp_loop_bind_compat.h"`), which allows calls (preferred form still under discussion).
 
 Hard rules:
 - **Never put an automatic array in `local()`/`local_init()`.** It crashes or works by
@@ -121,11 +123,10 @@ Full rules, with evidence: `references/device-calls.md`. Hard rules:
   `!$omp declare target`; a cross-file callee without it fails to link.
 - **Never pass an `(i,j,:)` section from inside a kernel.** It is repacked on the device heap
   and crashes at scale. Pass the whole array plus `i, j`.
-- Declare array dummies explicit-shape and input scalars `VALUE`: worth ~30% and ~20%.
+- Declare array dummies explicit-shape (`a(isl:iel, jsl:jel, nk)`, not `a(:,:,:)`): worth ~30%.
 - Prefer caller-supplied workspace over automatics in the callee (+30%).
 - `!DIR$ ATTRIBUTES FORCEINLINE` does nothing in nvfortran; inlining needs
-  `-Minline=name:<routine>[,reshape]`. Check `-Minfo=inline`, and recheck answers after
-  inlining.
+  `-Minline=name:<routine>[,reshape]`. Check `-Minfo=inline`.
 - An elemental called on whole arrays outside a `do concurrent` silently runs on the host.
 
 ## Data mapping
