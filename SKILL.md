@@ -99,11 +99,15 @@ Full rules, with evidence: `references/loop-constructs.md`. In short:
 
 1. **`do concurrent`** by default, with `k` first in a single header and every locality
    clause wrapped in `DO_LOCALITY(...)` (`#include "do_concurrent_compat.h"`).
-2. **`!$omp target teams distribute parallel do collapse(n) private(...)`** when the body
-   calls a procedure or needs per-iteration array scratch.
-3. **`!$omp target teams loop collapse(n)`** only when the body makes no calls, unless it
-   carries `LOOP_BIND_TEAMS_PARALLEL` (`bind(teams,parallel)`, from
-   `#include "omp_loop_bind_compat.h"`), which allows calls (preferred form still under discussion).
+2. **`!$omp target teams distribute parallel do collapse(n) private(...)`** whenever you need
+   an OpenMP construct: the body calls a procedure, or needs per-iteration array scratch.
+   Map a private array with `!$omp target enter data map(alloc: w)` in its own statement
+   (and `exit data` after), not on the construct.
+
+Do not write new `!$omp target teams loop` (with or without `bind(teams,parallel)`); convert
+existing ones to form 2. With derived-type bounds (`G%isc:G%iec`) nvfortran sizes a private
+array for a fixed 2432-team grid instead of the trip count, and a call in the body drops the
+loop to one thread per team. Details and numbers: `references/loop-constructs.md` section 1.
 
 Hard rules:
 - **Never put an automatic array in `local()`/`local_init()`.** It crashes or works by
