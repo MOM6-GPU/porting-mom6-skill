@@ -40,7 +40,7 @@ most relevant to GPU porting work:
   order; avoid the `**` exponent operator for integer powers (use repeated
   multiplication) and for cube roots (use the MOM6 `cuberoot` intrinsic).
   **This is directly relevant to GPU porting**: reordering a reduction to fit
-  a `do concurrent` or `target teams loop` construct must preserve the
+  a `do concurrent` or `target teams distribute parallel do` construct must preserve the
   original summation order, or the ported loop will produce answers that
   differ from the CPU / `dev/gpu` baseline even though the physics is
   unchanged. When collapsing or reassociating a loop for offload, check that

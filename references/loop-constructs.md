@@ -12,21 +12,55 @@ Contents: 1 choosing a construct · 2 `do concurrent` conventions · 3 scalars i
 Take the first that fits:
 
 1. **`do concurrent`** by default. It is standard Fortran and gets nvfortran's best code.
-2. **`!$omp target teams distribute parallel do collapse(n) private(...)`** when the body
-   **calls a procedure**, or needs array scratch (section 4). The collapse is asserted, not
-   inferred, and the explicit thread mapping avoids the compiler-chosen mappings that break
-   below. Precedent: the column kernels in `vertvisc_coef` (`MOM_vert_friction.F90`).
-3. **`!$omp target teams loop collapse(n)`** only when the body makes **no** calls, unless it
-   carries `bind(teams,parallel)`. With the binding asserted, `target teams loop` can call
-   procedures and has given better performance than form 2. Write it through the compatibility
-   macro, since only nvfortran supports the clause:
+2. **`!$omp target teams distribute parallel do collapse(n) private(...)`** whenever you need
+   an OpenMP construct: the body **calls a procedure**, or needs array scratch (section 4). The
+   collapse is asserted, not inferred, and the explicit thread mapping avoids the
+   compiler-chosen mappings that break below. Precedent: the column kernels in `vertvisc_coef`
+   (`MOM_vert_friction.F90`).
+
+   A private array needs its device storage mapped separately. Without that, nvfortran
+   implicitly maps the host copy `tofrom` on every launch (`-Minfo` says `Generating implicit
+   map(tofrom: w)`; `NVCOMPILER_ACC_NOTIFY=2` shows a small upload and download per launch).
+   Put the map in its own `enter data`/`exit data` pair, never on the construct itself, since
+   other compilers reject a variable that is in both `private` and `map` on one directive:
    ```fortran
-   #include "omp_loop_bind_compat.h"
-   !$omp target teams loop collapse(2) LOOP_BIND_TEAMS_PARALLEL
+   !$omp target enter data map(alloc: w)
+   !$omp target teams distribute parallel do collapse(2) private(w)
+   ...
+   !$omp target exit data map(release: w)
    ```
-   `LOOP_BIND_TEAMS_PARALLEL` expands to `bind(teams,parallel)` where supported and to nothing
-   otherwise. Whether this or form 2 is the preferred form for loops with calls is still under
-   discussion; follow the surrounding module, or ask the user.
+   If the routine already has routine-level `enter data`/`exit data` for its other arrays, add
+   `w` there and use the same exit kind (`release` or `delete`) as its neighbours.
+
+**Do not write new `!$omp target teams loop` kernels, and convert existing ones to form 2**,
+including any that carry `LOOP_BIND_TEAMS_PARALLEL`. Two nvfortran behaviours, both seen on
+26.9 `[run-verified]`:
+
+- *Private array sized for the wrong grid.* nvfortran allocates the device copy of a
+  `private(w)` array for every planned thread. When the loop bounds are derived-type members
+  (`do j=G%jsc,G%jec`, `do i=G%isc,G%iec`, the usual MOM6 form) it cannot infer the trip count
+  and falls back to a fixed grid of 2432 teams, or 2432 x 128 copies if the loop is also put
+  on 128 threads per team. A 75-level array then took 178 MB in a MOM6 kernel. Reproducer, a
+  64-iteration loop with a runtime-length `work(nz)`, `nz=2000`:
+
+  | construct, bounds | private buffer |
+  |---|---|
+  | `teams loop`, `G%isc:G%iec` | 38.9 MB (`nz x 2432` doubles) |
+  | `teams loop`, bounds copied to local integers | 1.0 MB |
+  | `teams distribute parallel do`, either | 2.0 MB |
+
+  Copying the bounds into local integers fixes the size for `teams loop`, but the mapping the
+  compiler picks for the same source changes with the other kernels in the subroutine, so the
+  size is fragile. `distribute parallel do` sizes the buffer to the launch whatever the bounds
+  look like. `num_teams(...)`, `thread_limit(...)` and `NVCOMPILER_ACC_GANGLIMIT` do not
+  shrink the `teams loop` buffer, and `num_teams(N)` with derived-type bounds makes it
+  `N x 2432 x 128` copies, so do not add it. Converting four `bind(teams,parallel)` loops in
+  `benchmark_ALE` this way cut peak device memory by 9.5 MiB with the clocks unchanged.
+- *A call in the body gives one thread per team.* A called routine may contain its own
+  parallel loop, so nvfortran maps a `teams loop` with a call onto teams only unless the
+  callee is inlined or the loop has `bind(teams,parallel)`. nvfortran has no global flag
+  to change this. `bind(teams,parallel)` fixes the thread count but not the derived-type
+  bounds problem above.
 
 Why calls push you to form 2 `[run-verified]`: when nvfortran picks the thread mapping itself
 (`do concurrent` under `-stdpar=gpu`, or `target teams loop`) and puts an inner loop on
