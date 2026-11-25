@@ -121,10 +121,11 @@ Full rules, with evidence: `references/device-calls.md`. Hard rules:
 
 - A callee in a `do concurrent` must be `pure`. Mark every device-called routine
   `!$omp declare target`; a cross-file callee without it fails to link.
-- **Never pass an `(i,j,:)` section from inside a kernel.** It is repacked on the device heap
-  and crashes at scale. Pass the whole array plus `i, j`.
+- **Never pass a non-contiguous section such as `(i,j,:)` from inside a kernel**, however the
+  dummy is declared. It is copied to the device heap: very slow, and it crashes at scale. Pass
+  the whole array plus `i, j`.
 - Declare array dummies explicit-shape (`a(isl:iel, jsl:jel, nk)`, not `a(:,:,:)`): worth ~30%.
-- Prefer caller-supplied workspace over automatics in the callee (+30%).
+- Prefer caller-supplied workspace over automatics in the callee (+30% or far more, by kernel).
 - `!DIR$ ATTRIBUTES FORCEINLINE` does nothing in nvfortran; inlining needs
   `-Minline=name:<routine>[,reshape]`. Check `-Minfo=inline`.
 - An elemental called on whole arrays outside a `do concurrent` silently runs on the host.

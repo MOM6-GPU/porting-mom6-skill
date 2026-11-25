@@ -58,12 +58,17 @@ Confirm with `-Minfo=inline`: `<routine> inlined, size=...`.
 
 ## 3. Passing arrays
 
-- **Never pass a non-contiguous section built inside the kernel**, such as `Igu(i,j,:)` to a
-  `dimension(:)` dummy. nvfortran copies it into a per-thread temporary on the device heap
-  (~8 MB by default). With enough columns the heap runs out and the kernel fails with a bare
-  `CUDA_ERROR_ILLEGAL_ADDRESS`; at smaller sizes it is ~400x slower `[run-verified]`.
+- **Never pass a non-contiguous section built inside the kernel**, such as `Igu(i,j,:)`, to a
+  procedure, however the dummy is declared (`(:)`, `(nk)` or `contiguous`). nvfortran copies each
+  section into a temporary on the device heap, once per call per thread. Small kernels ran 300x
+  or more slower, and the kernel crashes when the heap runs out, sooner the more sections it
+  passes: a bare `CUDA_ERROR_ILLEGAL_ADDRESS` on 26.3, error 719 on 26.11 (with
+  `DEVICE FORTRAN ALLOCATION FAILED` naming the heap-size variable, seen in MOM6)
+  `[run-verified]`. `NV_ACC_CUDA_HEAPSIZE` avoids the crash, not the cost. To check, `-Minfo`
+  prints `Copy in of <array> in call to <routine>` (for host calls too), and
   `compute-sanitizer --tool memcheck` shows `Device-side malloc failed`. Pass the whole 3-D
-  array plus `i, j`, and declare the dummies `(is:ie, js:je, nk)` (last item below).
+  array plus `i, j`, and declare the dummies `(is:ie, js:je, nk)` (last item below), as
+  `tdma6_block` (`MOM_wave_speed.F90`) does for `y`.
 - A contiguous section taken once on the host, outside any kernel, is fine: `tv%T(:,:,1)` passed
   to a 2-D interface that runs its own `do concurrent` showed no slowdown and identical answers.
   Write a real 2-D interface instead of adding a fake extent-1 dimension to reuse a 3-D one.
@@ -79,7 +84,8 @@ type component such as `GV%ke`) compiles and gives correct answers `[run-verifie
 says `CUDA global memory used for w`: it is a device `malloc` per call. This is unlike
 automatics in a `do concurrent` `local()` clause, which fail (`loop-constructs.md` section 4).
 
-It is slow. Ranked from fastest, measured on the `wave_speed` clock:
+It is slow, by an amount that depends on the kernel: one automatic in a small column kernel
+cost over 150x `[run-verified]`. Ranked from fastest, measured on the `wave_speed` clock:
 1. The caller supplies the workspace: a 3-D `(i,j,k)` array passed in, or the caller's
    `private(...)` scratch (baseline).
 2. A fixed size such as `dimension(GPU_nk_max)`: +6%, lost to occupancy when `nk` is much
@@ -89,7 +95,8 @@ It is slow. Ranked from fastest, measured on the `wave_speed` clock:
 Automatics are heap-allocated on the host too (`pgf90_auto_alloc04_i8` calls `malloc`), so
 they are no way to avoid allocation cost. With many columns and large automatics the device heap
 can run out; nvfortran checks user automatics and prints a message naming
-`NV_ACC_CUDA_HEAPSIZE`, unlike the silent section-repack failure in section 3.
+`NVCOMPILER_ACC_CUDA_HEAPSIZE`. On 26.3 the section temporaries of section 3 get no such check;
+on 26.11 they do.
 
 An earlier claim that nvfortran cannot size a callee automatic from non-dummy data such as
 `SZK_(GV)` (`05c74b56b`, nvfortran 25.x) did not reproduce on 26.3.
