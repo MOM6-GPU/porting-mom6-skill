@@ -85,7 +85,7 @@ says `CUDA global memory used for w`: it is a device `malloc` per call. This is 
 automatics in a `do concurrent` `local()` clause, which fail (`loop-constructs.md` section 4).
 
 It is slow, by an amount that depends on the kernel: one automatic in a small column kernel
-cost over 150x `[run-verified]`. Ranked from fastest, measured on the `wave_speed` clock:
+cost about 300x `[run-verified]`. Ranked from fastest, measured on the `wave_speed` clock:
 1. The caller supplies the workspace: a 3-D `(i,j,k)` array passed in, or the caller's
    `private(...)` scratch (baseline).
 2. A fixed size such as `dimension(GPU_nk_max)`: +6%, lost to occupancy when `nk` is much
