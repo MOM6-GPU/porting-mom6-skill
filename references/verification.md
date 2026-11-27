@@ -12,8 +12,44 @@ Contents: 1 build flags · 2 answers · 3 keeping arithmetic order fixed · 4 ma
 Our GPU build: `-mp=gpu -stdpar=gpu -gpu=mem:separate -Mnofma -r8`, at `-O3` (or
 `-O0` for debugging). Other references give flags only where they differ.
 
-`-Mnovect` is required at `-O2` or higher for bitwise comparison: CPU vectorization in
-nvfortran changes the order of operations, so answers change.
+Vectorization must be restricted at `-O2` or `-O4` for bitwise comparison (`-Mvect` switches on
+implicitly at `-O2`; `-O1` needs nothing; `-O3` has a separate problem, below). The cause is
+reassociation: the CPU vectorizer reorders
+floating-point operations (vectorized reductions), so answers change in the last bits. The
+narrow fix is `-Mvect=noassoc`, which keeps vectorization and turns off only reassociation. Use
+`-Mnovect` as the conservative choice if `-Mvect=noassoc` is not enough on your configuration
+`[run-verified]`.
+
+Measured on nvfortran 26.9 against each case's `ocean.stats.base`, GPU build, FMS built
+separately with `-O1 -Mnofma -Mnovect`:
+
+| MOM6 flags | `double_gyre` | `benchmark` | `benchmark_ALE` |
+|---|---|---|---|
+| `-O1`, no vect flag | pass | pass | pass |
+| `-O2`, no vect flag | pass | pass | **fail** |
+| `-O2 -Mvect=noassoc` | pass | pass | pass |
+| `-O3`, no vect flag | pass | **fail** | **fail** |
+| `-O3 -Mvect=noassoc` | pass | **fail** | pass |
+| `-O3 -Mnovect` | not run | **fail** | not run |
+| `-O4`, no vect flag | pass | pass | **fail** |
+| `-O4 -Mvect=noassoc` | pass | pass | pass |
+| `-O4 -Mnovect` | pass | pass | pass |
+
+- **At `-O2` and `-O4` only `benchmark_ALE` is sensitive.** Passing `double_gyre` and `benchmark`
+  without any vect flag does not show that vectorization is harmless, so check `benchmark_ALE`.
+- **`-O3` fails `benchmark` whatever the vect flag, so it is not a vectorization effect.** The
+  `-O3` default and `-O3 -Mvect=noassoc` give byte-identical `ocean.stats`, `-O3 -Mnovect` gives a
+  different wrong one, and all differ from the base at about 1e-10 by step 24. `-O4` passes, so
+  the cause is not found. Neither `-Mvect=noassoc` nor `-Mnovect` makes an `-O3` build
+  reproduce `benchmark`; use `-O2` or `-O4` for bitwise comparison.
+- **`noassoc` is the controlling sub-option.** On `benchmark_ALE` at `-O4`, `-Mvect=nosimd`, `noidiom`,
+  `nofuse`, `nopartial` and `noshort` each still fail.
+- **It is not an AVX2 versus AVX-512 effect.** Targeting AVX2 (`-tp=haswell`, `-tp=znver3`) or
+  capping the vector width (`-Mvect=simd:256`, `simd:128`) does not fix `benchmark_ALE`. The
+  default, `-tp=haswell`, `-tp=znver3` and `simd:256` give byte-identical wrong `ocean.stats`.
+  This was run on an AVX-512 CPU (Zen 4); no AVX2-only hardware was tested. If a machine passes
+  without `-Mnovect`, compare `-O` level, compiler version, and whether its `ocean.stats.base` came
+  from that machine, before blaming the CPU.
 
 `-Mnofma` is required for bitwise comparison: without it, host and device contract `a*b + c`
 differently and answers differ in the last bit `[run-verified]`. Check that your build's flags
