@@ -77,33 +77,27 @@ in the body must be in `private(...)`, or the loop races and gives nondeterminis
 
 ## 4. Arrays in `local()`
 
-**Never put an automatic array in `local(...)` / `local_init(...)`.** This holds for any rank,
-and whether the extent comes from a dummy (`nz`), a type component (`SZK_(GV)`), or bounds
-like `SZI_(G)` `[run-verified]`. The outcome depends on the schedule nvfortran picks, shown by
-`-Minfo=accel` on the loop that carries `local(w)`:
+**Never put an automatic array in `local(...)` / `local_init(...)`.** This holds for any rank and
+any extent (`nz`, `SZK_(GV)`, `SZI_(G)`) `[run-verified]`. The host sizes the device buffer for the
+private copies from `w`'s host bounds. If the host never uses `w`, nvfortran drops its host
+allocation, so those bounds are never set and the buffer has the wrong size (0 bytes and NULL at
+`-O2`): `CUDA_ERROR_ILLEGAL_ADDRESS`, or an `Out of memory allocating` absurd size. The schedule
+does not matter. Using `w` on the host first (an assignment, or `target enter data map`) gives the
+right size and passes on 26.11, but 26.3 still crashes, and the fix is easy to edit away.
 
-| `-Minfo` for the `local` loop | Automatic `w` | Fixed-size `w` |
-|---|---|---|
-| `CUDA thread blocks, CUDA threads(128) blockidx%x threadidx%x` (typical for `do concurrent (j,i)` with serial `k` loops inside) | **crash**, `CUDA_ERROR_ILLEGAL_ADDRESS` | passed (the compiler chose blocks-only) |
-| `CUDA thread blocks ! blockidx%x`, inner loops on threads (typical for `do concurrent (j)` over `w(SZI_,SZK_)`) | passes **only if the host used `w` before the loop** (an assignment, or a `target enter data map`); otherwise undefined | passes |
-| `CUDA thread blocks, CUDA threads(4) blockidx%x threadidx%y` | not seen | **silently wrong**: 4 iterations share one `w` |
-
-With no host use, nvfortran drops `w`'s host allocation (no `pgf90_auto_alloc04_i8` in `-S`),
-yet the kernel sizes its private copies from bounds that were never set. The result is
-repeatable for a given binary but flips with unrelated edits: a crash, an
-`Out of memory allocating 17648557553772920832 bytes`, or a pass. `local_init` behaves like
-`local`. The schedule is not visible in the source, hence "never".
+A fixed-size `w` is sized correctly, but check the schedule: under
+`CUDA thread blocks, CUDA threads(4) blockidx%x threadidx%y` four iterations shared one `w` and
+answers were silently wrong.
 
 For per-iteration array scratch, use, best first:
 - a 3-D workspace indexed `(i,j,k)`, CS-resident or passed in by the caller;
 - form 2 of section 1 with `private(w)` and `w` automatic, which passed in every variant
   tested, including those where `local(w)` crashed.
 
-Small fixed-size arrays in a column loop (`e(efp_digits)` in `MOM_coms.F90`) are fine, but after
-putting any array in `local()`, check the schedule against the table. In static-memory builds
-`SZK_(GV)` is a constant, so there the fixed-size column applies.
+Small fixed-size arrays in a column loop (`e(efp_digits)` in `MOM_coms.F90`) are fine. In
+static-memory builds `SZK_(GV)` is a constant, so `w(SZK_(GV))` is fixed-size there.
 
-Reproducers: nvfortran-mres repo, `dc_local_automatics/` and `mre2_do_concurrent_local.F90`.
+Reproducers: nvfortran-mres repo, Issue 7 (`MRE_dc_local_automatic_null_buffer.F90`).
 
 ## 5. Reductions
 
