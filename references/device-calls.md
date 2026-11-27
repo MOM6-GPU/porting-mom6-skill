@@ -84,8 +84,11 @@ type component such as `GV%ke`) compiles and gives correct answers `[run-verifie
 says `CUDA global memory used for w`: it is a device `malloc` per call. This is unlike
 automatics in a `do concurrent` `local()` clause, which fail (`loop-constructs.md` section 4).
 
-It is slow, by an amount that depends on the kernel: one automatic in a small column kernel
-cost over 150x `[run-verified]`. Ranked from fastest, measured on the `wave_speed` clock:
+It is slow, by an amount that depends on the kernel. In MOM6, an automatic `c1(nk)` in
+`streamfn_solver` (`MOM_thickness_diffuse.F90`) made its two kernels about 300x slower than a
+caller-supplied workspace (93 µs against 26-31 ms per call; thickness-diffusion clock 0.075 s
+against 0.42 s), with identical answers `[run-verified]` (benchmark, 26.11). The PTX shows a
+device `malloc` and `free` per column per call. Ranked from fastest, on the `wave_speed` clock:
 1. The caller supplies the workspace: a 3-D `(i,j,k)` array passed in, or the caller's
    `private(...)` scratch (baseline).
 2. A fixed size such as `dimension(GPU_nk_max)`: +6%, lost to occupancy when `nk` is much
